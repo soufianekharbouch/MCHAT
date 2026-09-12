@@ -701,5 +701,5 @@ const initializeApp =
 
     </SafeAreaProvider>
 
-  );
-}
+  ); 
+} 
