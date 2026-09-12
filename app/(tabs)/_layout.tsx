@@ -1,35 +1,370 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
+import React from "react";
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import {
+  Tabs,
+} from "expo-router";
 
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
+import {
+  Ionicons,
+} from "@expo/vector-icons";
+
+import {
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
+
+import {
+  CustomerDataProvider,
+} from "../../context/CustomerDataContext";
+
+import {
+  useAppLanguage,
+} from "../../context/LanguageContext";
+
+import MchatHeader
+  from "../../components/MchatHeader";
+
+
+const COLORS = {
+  primary:
+    "#249B97",
+
+  coral:
+    "#EB6268",
+
+  text:
+    "#272727",
+
+  muted:
+    "#77736D",
+
+  white:
+    "#FFFFFF",
+
+  border:
+    "#E5E0D9",
+
+  background:
+    "#F7F4EF",
+};
+
+
+export default function TabsLayout() {
+
+  const {
+    isArabic,
+  } = useAppLanguage();
+
+  const insets =
+    useSafeAreaInsets();
+
 
   return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+
+    <CustomerDataProvider>
+
+      <Tabs
+        screenOptions={{
+          /*
+          |--------------------------------------------------------------------------
+          | CUSTOM HEADER
+          |--------------------------------------------------------------------------
+          */
+
+          headerShown:
+            true,
+
+          header:
+            () => (
+              <MchatHeader />
+            ),
+
+
+          /*
+          |--------------------------------------------------------------------------
+          | TAB COLORS
+          |--------------------------------------------------------------------------
+          */
+
+          tabBarActiveTintColor:
+            COLORS.primary,
+
+          tabBarInactiveTintColor:
+            COLORS.muted,
+
+
+          /*
+          |--------------------------------------------------------------------------
+          | SAFE AREA BOTTOM
+          |--------------------------------------------------------------------------
+          |
+          | On ajoute la hauteur de la zone système Android.
+          |
+          */
+
+          tabBarStyle: {
+            backgroundColor:
+              COLORS.white,
+
+            borderTopColor:
+              COLORS.border,
+
+            borderTopWidth:
+              1,
+
+            /*
+             * 58px pour le contenu du menu
+             * +
+             * safe area Android
+             */
+
+            height:
+              58
+              +
+              Math.max(
+                insets.bottom,
+                8
+              ),
+
+            paddingTop:
+              6,
+
+            paddingBottom:
+              Math.max(
+                insets.bottom,
+                8
+              ),
+          },
+
+
+          /*
+          |--------------------------------------------------------------------------
+          | LABELS
+          |--------------------------------------------------------------------------
+          */
+
+          tabBarLabelStyle: {
+            fontFamily:
+              "Cairo_600SemiBold",
+
+            fontSize:
+              10,
+
+            marginBottom:
+              2,
+          },
+
+
+          /*
+          |--------------------------------------------------------------------------
+          | TAB ITEMS
+          |--------------------------------------------------------------------------
+          */
+
+          tabBarItemStyle: {
+            paddingVertical:
+              2,
+          },
+
+
+          /*
+          |--------------------------------------------------------------------------
+          | SCREEN BACKGROUND
+          |--------------------------------------------------------------------------
+          */
+
+          sceneStyle: {
+            backgroundColor:
+              COLORS.background,
+          },
         }}
-      />
-      <Tabs.Screen
-        name="explore"
-        options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
-        }}
-      />
-    </Tabs>
+      >
+
+        {/*
+        |--------------------------------------------------------------------------
+        | HOME
+        |--------------------------------------------------------------------------
+        */}
+
+        <Tabs.Screen
+          name="index"
+          options={{
+            title:
+              isArabic
+                ? "الرئيسية"
+                : "Home",
+
+            tabBarIcon:
+              ({
+                color,
+                size,
+                focused,
+              }) => (
+
+                <Ionicons
+                  name={
+                    focused
+                      ? "home"
+                      : "home-outline"
+                  }
+                  size={
+                    size
+                  }
+                  color={
+                    color
+                  }
+                />
+
+              ),
+          }}
+        />
+
+
+        {/*
+        |--------------------------------------------------------------------------
+        | PETS
+        |--------------------------------------------------------------------------
+        */}
+
+        <Tabs.Screen
+          name="pets"
+          options={{
+            title:
+              isArabic
+                ? "حيواناتي"
+                : "My Pets",
+
+            tabBarIcon:
+              ({
+                color,
+                size,
+                focused,
+              }) => (
+
+                <Ionicons
+                  name={
+                    focused
+                      ? "paw"
+                      : "paw-outline"
+                  }
+                  size={
+                    size
+                  }
+                  color={
+                    color
+                  }
+                />
+
+              ),
+          }}
+        />
+
+
+        {/*
+        |--------------------------------------------------------------------------
+        | ORDERS
+        |--------------------------------------------------------------------------
+        */}
+
+        <Tabs.Screen
+          name="orders"
+          options={{
+            title:
+              isArabic
+                ? "الطلبات"
+                : "Orders",
+
+            tabBarIcon:
+              ({
+                color,
+                size,
+                focused,
+              }) => (
+
+                <Ionicons
+                  name={
+                    focused
+                      ? "cube"
+                      : "cube-outline"
+                  }
+                  size={
+                    size
+                  }
+                  color={
+                    color
+                  }
+                />
+
+              ),
+          }}
+        />
+
+
+        {/*
+        |--------------------------------------------------------------------------
+        | SETTINGS
+        |--------------------------------------------------------------------------
+        */}
+
+        <Tabs.Screen
+          name="settings"
+          options={{
+            title:
+              isArabic
+                ? "الإعدادات"
+                : "Settings",
+
+            tabBarIcon:
+              ({
+                color,
+                size,
+                focused,
+              }) => (
+
+                <Ionicons
+                  name={
+                    focused
+                      ? "settings"
+                      : "settings-outline"
+                  }
+                  size={
+                    size
+                  }
+                  color={
+                    color
+                  }
+                />
+
+              ),
+          }}
+        />
+
+
+        {/*
+        |--------------------------------------------------------------------------
+        | NOTIFICATIONS
+        |--------------------------------------------------------------------------
+        |
+        | Écran accessible via le header / push,
+        | mais pas affiché dans la barre du bas.
+        |
+        */}
+
+        <Tabs.Screen
+          name="notifications"
+          options={{
+            title:
+              isArabic
+                ? "الإشعارات"
+                : "Notifications",
+
+            href:
+              null,
+          }}
+        />
+
+      </Tabs>
+
+    </CustomerDataProvider>
+
   );
 }
