@@ -1,10 +1,15 @@
 import React, {
   useEffect,
+  useRef,
   useState,
 } from "react";
-
+import {
+  CustomerDataProvider,
+} from "../context/CustomerDataContext";
 import {
   ActivityIndicator,
+  AppState,
+  AppStateStatus,
   View,
 } from "react-native";
 
@@ -34,6 +39,10 @@ import {
 import {
   markNotificationViewedSafe,
 } from "../services/notificationApi";
+
+import {
+  getCustomerSettings,
+} from "../services/customerApi";
 
 
 /*
@@ -91,12 +100,167 @@ const registerDeviceOnce =
   };
 
 
+
+/*
+|--------------------------------------------------------------------------
+| APP ACTIVITY TRACKING
+|--------------------------------------------------------------------------
+|
+| POST /api/mobile/activity
+|
+| Activity is counted only when:
+| - the customer has an access_token
+| - the app is in foreground
+|
+*/
+
+const MOBILE_API_URL =
+  "https://animal-care2.kharbouch-soufiane.com/api/mobile";
+
+
+const sendAppActivity =
+  async (
+    seconds: number
+  ): Promise<void> => {
+
+    try {
+
+      const normalizedSeconds =
+        Math.min(
+          300,
+          Math.max(
+            1,
+            Math.floor(
+              seconds
+            )
+          )
+        );
+
+
+      const accessToken =
+        await SecureStore.getItemAsync(
+          "access_token"
+        );
+
+
+      if (!accessToken) {
+        return;
+      }
+
+
+      const response =
+        await fetch(
+          `${MOBILE_API_URL}/activity`,
+          {
+            method:
+              "POST",
+
+            headers: {
+              Accept:
+                "application/json",
+
+              "Content-Type":
+                "application/json",
+            },
+
+            body:
+              JSON.stringify({
+                access_token:
+                  accessToken,
+
+                seconds:
+                  normalizedSeconds,
+              }),
+          }
+        );
+
+
+      if (!response.ok) {
+
+        let responseBody:
+          any = null;
+
+
+        try {
+
+          responseBody =
+            await response.json();
+
+        } catch {
+
+          responseBody =
+            null;
+        }
+
+
+        console.warn(
+          "App activity tracking failed:",
+          response.status,
+          responseBody
+        );
+
+        return;
+      }
+
+
+      if (__DEV__) {
+
+        console.log(
+          "APP ACTIVITY:",
+          `+${normalizedSeconds}s`
+        );
+      }
+
+
+    } catch (
+      error
+    ) {
+
+      console.warn(
+        "App activity tracking error:",
+        error
+      );
+    }
+  };
+
+
 export default function RootLayout() {
 
   const [
     appReady,
     setAppReady,
   ] = useState(false);
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | APP ACTIVITY REFS
+  |--------------------------------------------------------------------------
+  */
+
+  const appStateRef =
+    useRef<AppStateStatus>(
+      AppState.currentState
+    );
+
+
+  const activityStartedAtRef =
+    useRef<number | null>(
+      AppState.currentState === "active"
+        ? Date.now()
+        : null
+    );
+
+
+  const activityIntervalRef =
+    useRef<
+      ReturnType<
+        typeof setInterval
+      >
+      | null
+    >(
+      null
+    );
 
 
   /*
@@ -370,6 +534,263 @@ const handleNotificationResponse =
   };
 
 
+  /*
+  |--------------------------------------------------------------------------
+  | TRACK TIME SPENT IN APP
+  |--------------------------------------------------------------------------
+  |
+  | Sends about 60 seconds every minute while the app is active.
+  | Any remaining partial minute is flushed when the app goes background.
+  |
+  */
+
+  useEffect(() => {
+
+    const stopActivityInterval =
+      () => {
+
+        if (
+          activityIntervalRef.current
+        ) {
+
+          clearInterval(
+            activityIntervalRef.current
+          );
+
+          activityIntervalRef.current =
+            null;
+        }
+      };
+
+
+    const flushCurrentActivity =
+      async () => {
+
+        const startedAt =
+          activityStartedAtRef.current;
+
+
+        activityStartedAtRef.current =
+          null;
+
+
+        if (!startedAt) {
+          return;
+        }
+
+
+        const elapsedSeconds =
+          Math.floor(
+            (
+              Date.now()
+              -
+              startedAt
+            )
+            /
+            1000
+          );
+
+
+        if (
+          elapsedSeconds <= 0
+        ) {
+          return;
+        }
+
+
+        let remaining =
+          elapsedSeconds;
+
+
+        while (
+          remaining > 0
+        ) {
+
+          const chunk =
+            Math.min(
+              remaining,
+              300
+            );
+
+
+          await sendAppActivity(
+            chunk
+          );
+
+
+          remaining -=
+            chunk;
+        }
+      };
+
+
+    const startActivityInterval =
+      () => {
+
+        if (
+          appStateRef.current
+          !==
+          "active"
+        ) {
+          return;
+        }
+
+
+        if (
+          activityIntervalRef.current
+        ) {
+          return;
+        }
+
+
+        activityStartedAtRef.current =
+          Date.now();
+
+
+        activityIntervalRef.current =
+          setInterval(
+            async () => {
+
+              if (
+                appStateRef.current
+                !==
+                "active"
+              ) {
+                return;
+              }
+
+
+              const startedAt =
+                activityStartedAtRef.current;
+
+
+              if (!startedAt) {
+
+                activityStartedAtRef.current =
+                  Date.now();
+
+                return;
+              }
+
+
+              const now =
+                Date.now();
+
+
+              const elapsedSeconds =
+                Math.floor(
+                  (
+                    now
+                    -
+                    startedAt
+                  )
+                  /
+                  1000
+                );
+
+
+              if (
+                elapsedSeconds <= 0
+              ) {
+                return;
+              }
+
+
+              activityStartedAtRef.current =
+                now;
+
+
+              await sendAppActivity(
+                Math.min(
+                  elapsedSeconds,
+                  300
+                )
+              );
+
+            },
+            60_000
+          );
+      };
+
+
+    if (
+      AppState.currentState
+      ===
+      "active"
+    ) {
+
+      appStateRef.current =
+        "active";
+
+      startActivityInterval();
+    }
+
+
+    const appStateSubscription =
+      AppState.addEventListener(
+        "change",
+        (
+          nextState
+        ) => {
+
+          const previousState =
+            appStateRef.current;
+
+
+          appStateRef.current =
+            nextState;
+
+
+          if (
+            previousState ===
+              "active"
+            &&
+            nextState !==
+              "active"
+          ) {
+
+            stopActivityInterval();
+
+            void flushCurrentActivity();
+
+            return;
+          }
+
+
+          if (
+            previousState !==
+              "active"
+            &&
+            nextState ===
+              "active"
+          ) {
+
+            startActivityInterval();
+          }
+        }
+      );
+
+
+    return () => {
+
+      stopActivityInterval();
+
+      appStateSubscription.remove();
+
+
+      if (
+        appStateRef.current
+        ===
+        "active"
+      ) {
+
+        void flushCurrentActivity();
+      }
+    };
+
+  }, []);
+
+
   useEffect(() => {
 
     let mounted = true;
@@ -552,6 +973,51 @@ const initializeApp =
         await mustChangeInitialPassword();
 
 
+      /*
+      |--------------------------------------------------------------------------
+      | LOAD CUSTOMER LANGUAGE
+      |--------------------------------------------------------------------------
+      |
+      | When the customer already has a valid session, the language saved in
+      | customer settings becomes the local application language.
+      |
+      | Failure to load settings must never block application startup.
+      |
+      */
+
+      try {
+
+        const customerSettings =
+          await getCustomerSettings();
+
+        const customerLanguage =
+          customerSettings
+            ?.settings
+            ?.language;
+
+        if (
+          customerLanguage === "ar"
+          ||
+          customerLanguage === "en"
+        ) {
+
+          await SecureStore.setItemAsync(
+            "locale",
+            customerLanguage
+          );
+        }
+
+      } catch (
+        languageError
+      ) {
+
+        console.warn(
+          "Unable to load customer language:",
+          languageError
+        );
+      }
+
+
       if (mounted) {
 
         setAppReady(
@@ -664,17 +1130,19 @@ const initializeApp =
   }
 
 
-  /*
-  |--------------------------------------------------------------------------
-  | ROUTER
-  |--------------------------------------------------------------------------
-  */
+/*
+|--------------------------------------------------------------------------
+| ROUTER
+|--------------------------------------------------------------------------
+*/
 
-  return (
+return (
 
-    <SafeAreaProvider>
+  <SafeAreaProvider>
 
-      <LanguageProvider>
+    <LanguageProvider>
+
+      <CustomerDataProvider>
 
         <Stack
           initialRouteName="login"
@@ -695,11 +1163,17 @@ const initializeApp =
             name="(tabs)"
           />
 
+          <Stack.Screen
+            name="pet-form"
+          />
+
         </Stack>
 
-      </LanguageProvider>
+      </CustomerDataProvider>
 
-    </SafeAreaProvider>
+    </LanguageProvider>
 
-  ); 
+  </SafeAreaProvider>
+
+);
 } 
