@@ -1,743 +1,1189 @@
-import React, {
-  useCallback,
-} from 'react';
-
-import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-
-import {
-  Ionicons,
-  MaterialCommunityIcons,
-} from '@expo/vector-icons';
-
-import {
-  SafeAreaView,
-} from 'react-native-safe-area-context';
-
-import {
-  router,
-  useFocusEffect,
-} from 'expo-router';
-
-import {
-  useAppLanguage,
-} from '../../hooks/useAppLanguage';
-
-import {
-  useCustomerData,
-} from '../../context/CustomerDataContext';
-
-import {
-  deletePet,
-} from '../../services/customerApi';
-
-import type {
-  Pet,
-} from '../../types/customer';
-
-
+import React, { useCallback, useState, } from "react";
+import { ActivityIndicator, Alert, Image, Pressable, RefreshControl, ScrollView, StyleSheet, Text, useWindowDimensions, View, } from "react-native";
+import { Ionicons, MaterialCommunityIcons, } from "@expo/vector-icons";
+import { SafeAreaView, } from "react-native-safe-area-context";
+import { router, useFocusEffect, } from "expo-router";
+import { useAppLanguage, } from "../../context/LanguageContext";
+import { useCustomerData, } from "../../context/CustomerDataContext";
+import { deletePet, } from "../../services/customerApi";
+import type { Pet, } from "../../types/customer";
 const COLORS = {
-  background: '#F7F4EF',
-  primary: '#249B97',
-  primaryLight: '#ECF8F7',
-  text: '#272727',
-  muted: '#77736D',
-  white: '#FFFFFF',
-  border: '#E5E0D9',
-  danger: '#B42318',
-  dangerLight: '#FEF3F2',
-  premium: '#A66A00',
-  premiumLight: '#FFF5D9',
+    background: "#F4F1EC",
+    primary: "#249B97",
+    primaryLight: "#EAF5F2",
+    text: "#191919",
+    muted: "#77736D",
+    border: "#DCD5CB",
+    white: "#FFFFFF",
+    dark: "#292929",
+    danger: "#B42318",
+    dangerLight: "#FEF3F2",
 };
-
-
-/*
-|--------------------------------------------------------------------------
-| PETS SCREEN
-|--------------------------------------------------------------------------
-*/
-
+type ViewMode = "list" | "grid";
+type ExtendedPet = Pet & {
+    subscription_status?: string;
+    next_order?: any;
+    orders?: any[];
+};
 export default function PetsScreen() {
+    const { isArabic, } = useAppLanguage();
+    const { subscription, loading, error, refresh, } = useCustomerData();
+    const { width, } = useWindowDimensions();
+    const isCompact = width < 460;
+    const [viewMode, setViewMode,] = useState<ViewMode>("list");
+    useFocusEffect(useCallback(() => {
+        void refresh();
+    }, [refresh]));
+    const t = isArabic
+        ? {
+            title: "حيواناتي الأليفة",
+            subtitle: "الملفات والاشتراكات ورحلة التغذية.",
+            renewPlans: "تجديد الخطط",
+            addPet: "إضافة حيوان",
+            active: "نشط",
+            inactive: "لا يوجد اشتراك",
+            manage: "إدارة",
+            editSubscription: "تعديل الاشتراك",
+            next: "التالي:",
+            none: "لا يوجد",
+            meals: "وجبة",
+            unknown: "غير محدد",
+            noPets: "لا توجد حيوانات مسجلة حالياً",
+            noPetsDescription: "يمكنك إضافة حيوانك الأليف للبدء.",
+            addFirstPet: "إضافة أول حيوان",
+            loadError: "تعذر تحميل بيانات الحيوانات",
+            delete: "حذف",
+            deleteTitle: "حذف الحيوان",
+            deleteMessage: "هل أنت متأكد أنك تريد حذف هذا الحيوان؟",
+            cancel: "إلغاء",
+            deleteError: "تعذر حذف الحيوان.",
+        }
+        : {
+            title: "My Pets",
+            subtitle: "Profiles, subscriptions and nutrition journeys.",
+            renewPlans: "Renew Plans",
+            addPet: "Add New Pet",
+            active: "Active",
+            inactive: "No subscription",
+            manage: "Manage",
+            editSubscription: "Edit Subscription",
+            next: "Next:",
+            none: "None",
+            meals: "Meals",
+            unknown: "Not specified",
+            noPets: "No pets found",
+            noPetsDescription: "Add your first pet to get started.",
+            addFirstPet: "Add your first pet",
+            loadError: "Unable to load pets",
+            delete: "Delete",
+            deleteTitle: "Delete pet",
+            deleteMessage: "Are you sure you want to delete this pet?",
+            cancel: "Cancel",
+            deleteError: "Unable to delete this pet.",
+        };
+    const pets = subscription?.animals || [];
+    const openAddPet = () => {
+        router.push("/pet-form");
+    };
+    const openManagePet = (pet: Pet) => {
+        router.push({
+            pathname: "/pet-form",
+            params: {
+                id: String(pet.id),
+            },
+        });
+    };
+    const openEditSubscription = (pet: Pet) => {
+        router.push({
+            pathname: "/pet-form",
+            params: {
+                id: String(pet.id),
+            },
+        });
+    };
+    const openRenewPlans = () => {
+    };
+    const confirmDeletePet = (pet: Pet) => {
+        Alert.alert(t.deleteTitle, t.deleteMessage, [
+            {
+                text: t.cancel,
+                style: "cancel",
+            },
+            {
+                text: t.delete,
+                style: "destructive",
+                onPress: async () => {
+                    try {
+                        await deletePet(pet.id);
+                        await refresh();
+                    }
+                    catch (deleteError: any) {
+                        Alert.alert("", deleteError?.message
+                            || t.deleteError);
+                    }
+                },
+            },
+        ]);
+    };
+    if (loading &&
+        pets.length === 0) {
+        return (<SafeAreaView edges={[
+                "left",
+                "right",
+            ]} style={styles.safeArea}>
 
-  const {
-    isArabic,
-  } = useAppLanguage();
+        <View style={styles.loader}>
 
+          <ActivityIndicator size="large" color={COLORS.primary}/>
 
-  const {
-    subscription,
-    loading,
-    error,
-    refresh,
-  } = useCustomerData();
-
-
-  useFocusEffect(
-    useCallback(() => {
-
-      void refresh();
-
-    }, [refresh])
-  );
-
-
-  const t = isArabic
-    ? {
-        title: 'حيواناتي الأليفة',
-        subtitle: 'معلومات حيواناتك الأليفة',
-        addPet: 'إضافة حيوان',
-        edit: 'تعديل',
-        delete: 'حذف',
-        premium: 'مميز',
-        noPets: 'لا توجد حيوانات مسجلة حالياً',
-        noPetsDescription: 'يمكنك إضافة حيوانك الأليف للبدء.',
-        addFirstPet: 'إضافة أول حيوان',
-        loadError: 'تعذر تحميل بيانات الحيوانات',
-        unknown: 'غير محدد',
-        deleteTitle: 'حذف الحيوان',
-        deleteMessage: 'هل أنت متأكد أنك تريد حذف هذا الحيوان؟',
-        cancel: 'إلغاء',
-        deleteError: 'تعذر حذف الحيوان.',
-        active: 'نشط', inactive: 'لا يوجد اشتراك', manage: 'إدارة', next: 'التالي:', none: 'لا يوجد', meals: 'وجبة',
-      }
-    : {
-        title: 'My pets',
-        subtitle: 'Information about your pets',
-        addPet: 'Add pet',
-        edit: 'Edit',
-        delete: 'Delete',
-        premium: 'Premium',
-        noPets: 'No pets found',
-        noPetsDescription: 'Add your first pet to get started.',
-        addFirstPet: 'Add your first pet',
-        loadError: 'Unable to load pets',
-        unknown: 'Not specified',
-        deleteTitle: 'Delete pet',
-        deleteMessage: 'Are you sure you want to delete this pet?',
-        cancel: 'Cancel',
-        deleteError: 'Unable to delete this pet.',
-        active: 'Active', inactive: 'No subscription', manage: 'Manage', next: 'Next:', none: 'None', meals: 'Meals',
-      };
-
-
-  const pets =
-    subscription?.animals || [];
-
-
-  const openAddPet = () => {
-
-    router.push('/pet-form');
-
-  };
-
-
-  const openEditPet = (
-    pet: Pet
-  ) => {
-
-    router.push({
-      pathname: '/pet-form',
-      params: {
-        id: String(pet.id),
-      },
-    });
-
-  };
-
-
-  const confirmDeletePet = (
-    pet: Pet
-  ) => {
-
-    Alert.alert(
-      t.deleteTitle,
-      t.deleteMessage,
-      [
-        {
-          text: t.cancel,
-          style: 'cancel',
-        },
-        {
-          text: t.delete,
-          style: 'destructive',
-          onPress: async () => {
-
-            try {
-
-              await deletePet(pet.id);
-              await refresh();
-
-            } catch (deleteError: any) {
-
-              Alert.alert(
-                '',
-                deleteError?.message
-                  || t.deleteError
-              );
-
-            }
-
-          },
-        },
-      ]
-    );
-
-  };
-
-
-  if (
-    loading
-    &&
-    pets.length === 0
-  ) {
-
-    return (
-      <SafeAreaView
-        style={styles.safeArea}
-      >
-        <View
-          style={styles.loader}
-        >
-          <ActivityIndicator
-            size="large"
-            color={COLORS.primary}
-          />
         </View>
-      </SafeAreaView>
-    );
 
-  }
+      </SafeAreaView>);
+    }
+    return (<SafeAreaView edges={[
+            "left",
+            "right",
+        ]} style={styles.safeArea}>
 
+      <ScrollView style={styles.scrollView} contentContainerStyle={[
+            styles.page,
+            isCompact &&
+                styles.pageCompact,
+        ]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={COLORS.primary} colors={[
+                COLORS.primary,
+            ]}/>}>
 
-  return (
-    <SafeAreaView
-      style={styles.safeArea}
-    >
+        
 
-      <ScrollView
-        contentContainerStyle={
-          styles.page
-        }
-        showsVerticalScrollIndicator={
-          false
-        }
-        refreshControl={
-          <RefreshControl
-            refreshing={loading}
-            onRefresh={refresh}
-            tintColor={COLORS.primary}
-            colors={[COLORS.primary]}
-          />
-        }
-      >
+        <View style={styles.pageHeader}>
 
-        <View
-          style={[
-            styles.header,
+          <Text style={[
+            styles.title,
+            isCompact &&
+                styles.titleCompact,
             isArabic &&
-              styles.rowRtl,
-          ]}
-        >
+                styles.textRtl,
+        ]}>
 
-          <View
-            style={styles.headerContent}
-          >
-            <Text
-              style={[
-                styles.title,
-                isArabic &&
-                  styles.textRtl,
-              ]}
-            >
-              {t.title}
-            </Text>
+            {t.title}
 
-            <Text
-              style={[
-                styles.subtitle,
-                isArabic &&
-                  styles.textRtl,
-              ]}
-            >
-              {t.subtitle}
-            </Text>
-          </View>
+          </Text>
 
+          <Text style={[
+            styles.subtitle,
+            isCompact &&
+                styles.subtitleCompact,
+            isArabic &&
+                styles.textRtl,
+        ]}>
 
-          <Pressable
-            style={[
-              styles.addButton,
-              isArabic &&
+            {t.subtitle}
+
+          </Text>
+
+        </View>
+
+        
+
+        <View style={[
+            styles.toolbar,
+            isCompact &&
+                styles.toolbarCompact,
+            isArabic &&
+                !isCompact &&
                 styles.rowRtl,
-            ]}
-            onPress={openAddPet}
-          >
-            <Ionicons
-              name="add"
-              size={19}
-              color={COLORS.white}
-            />
+        ]}>
 
-            <Text
-              style={styles.addButtonText}
-            >
-              {t.addPet}
+          
+
+          <Pressable onPress={openRenewPlans} style={({ pressed, }) => [
+            styles.renewButton,
+            isCompact &&
+                styles.fullWidthButton,
+            pressed &&
+                styles.buttonPressed,
+        ]}>
+
+            <MaterialCommunityIcons name="creation" size={20} color="#FFFFFF"/>
+
+            <Text numberOfLines={1} style={styles.renewButtonText}>
+
+              {t.renewPlans}
+
             </Text>
+
           </Pressable>
 
+          
+
+          <Pressable onPress={openAddPet} style={({ pressed, }) => [
+            styles.addButton,
+            isCompact &&
+                styles.fullWidthButton,
+            pressed &&
+                styles.buttonPressed,
+        ]}>
+
+            <Ionicons name="add" size={22} color={COLORS.text}/>
+
+            <Text numberOfLines={1} style={styles.addButtonText}>
+
+              {t.addPet}
+
+            </Text>
+
+          </Pressable>
+
+          
+
+          <View style={[
+            styles.viewSwitcher,
+            isCompact &&
+                styles.viewSwitcherCompact,
+        ]}>
+
+            <Pressable onPress={() => setViewMode("list")} style={[
+            styles.viewButton,
+            viewMode ===
+                "list" &&
+                styles.viewButtonActive,
+        ]}>
+
+              <Ionicons name="menu-outline" size={21} color={viewMode ===
+            "list"
+            ? COLORS.primary
+            : COLORS.muted}/>
+
+            </Pressable>
+
+            <Pressable onPress={() => setViewMode("grid")} style={[
+            styles.viewButton,
+            viewMode ===
+                "grid" &&
+                styles.viewButtonActive,
+        ]}>
+
+              <Ionicons name="grid-outline" size={18} color={viewMode ===
+            "grid"
+            ? COLORS.primary
+            : COLORS.muted}/>
+
+            </Pressable>
+
+          </View>
+
         </View>
 
+        
 
-        {!!error && (
-          <View
-            style={[
-              styles.errorBox,
-              isArabic &&
-                styles.rowRtl,
-            ]}
-          >
-            <Ionicons
-              name="alert-circle-outline"
-              size={19}
-              color={COLORS.danger}
-            />
+        <View style={[
+            styles.toolbarDivider,
+            isCompact &&
+                styles.toolbarDividerCompact,
+        ]}/>
 
-            <Text
-              style={[
+        
+
+        {!!error && (<View style={[
+                styles.errorBox,
+                isArabic &&
+                    styles.rowRtl,
+            ]}>
+
+            <Ionicons name="alert-circle-outline" size={19} color={COLORS.danger}/>
+
+            <Text style={[
                 styles.errorText,
                 isArabic &&
-                  styles.textRtl,
-              ]}
-            >
-              {error || t.loadError}
+                    styles.textRtl,
+            ]}>
+
+              {error ||
+                t.loadError}
+
             </Text>
-          </View>
-        )}
 
+          </View>)}
 
-        {pets.length === 0 ? (
+        
 
-          <View
-            style={styles.emptyBox}
-          >
-            <View
-              style={styles.emptyIcon}
-            >
-              <Ionicons
-                name="paw-outline"
-                size={40}
-                color={COLORS.primary}
-              />
+        {pets.length === 0 ? (<View style={styles.emptyBox}>
+
+            <View style={styles.emptyIcon}>
+
+              <Ionicons name="paw-outline" size={38} color={COLORS.primary}/>
+
             </View>
 
-            <Text
-              style={[
-                styles.emptyTitle,
-                isArabic &&
-                  styles.textRtl,
-              ]}
-            >
+            <Text style={styles.emptyTitle}>
+
               {t.noPets}
+
             </Text>
 
-            <Text
-              style={[
-                styles.emptyText,
-                isArabic &&
-                  styles.textRtl,
-              ]}
-            >
+            <Text style={styles.emptyText}>
+
               {t.noPetsDescription}
+
             </Text>
 
-            <Pressable
-              style={[
-                styles.emptyButton,
-                isArabic &&
-                  styles.rowRtl,
-              ]}
-              onPress={openAddPet}
-            >
-              <Ionicons
-                name="add-circle-outline"
-                size={19}
-                color={COLORS.white}
-              />
+            <Pressable style={styles.emptyButton} onPress={openAddPet}>
 
-              <Text
-                style={styles.emptyButtonText}
-              >
+              <Ionicons name="add" size={20} color="#FFFFFF"/>
+
+              <Text style={styles.emptyButtonText}>
+
                 {t.addFirstPet}
+
               </Text>
+
             </Pressable>
-          </View>
 
-        ) : (
+          </View>) : viewMode ===
+            "list" ? (<View style={styles.listContainer}>
 
-          <View
-            style={styles.list}
-          >
+            {pets.map((pet, index) => (<PetListItem key={pet.id} pet={pet as ExtendedPet} t={t} isArabic={isArabic} isCompact={isCompact} isLast={index ===
+                    pets.length - 1} onManage={() => openManagePet(pet)} onEditSubscription={() => openEditSubscription(pet)}/>))}
 
-            {pets.map((pet) => {
-              const p = pet as Pet & { subscription_status?: string; next_order?: any; orders?: any[] };
-              const active = p.subscription_status === 'active';
-              const nextDate = p.next_order?.scheduled_for || null;
-              const sourceOrder = p.next_order || p.orders?.[0];
-              const recipe = sourceOrder?.items?.[0]?.recipe?.name || null;
-              const meals = sourceOrder?.items?.reduce((n: number, i: any) => n + Number(i.quantity || 0), 0) || 0;
-              const plan = recipe ? `${recipe}${meals ? ` (${meals} ${t.meals})` : ''}` : null;
+          </View>) : (<View style={styles.gridContainer}>
 
-              return (
-                <View key={pet.id} style={styles.petCard}>
-                  <View style={[styles.petTopRow, isArabic && styles.rowRtl]}>
-                    <View style={styles.petInfo}>
-                      <View style={[styles.nameStatusRow, isArabic && styles.rowRtl]}>
-                        <Text numberOfLines={1} style={[styles.petName, isArabic && styles.textRtl]}>{pet.name || t.unknown}</Text>
-                        <View style={[styles.statusBadge, active ? styles.statusBadgeActive : styles.statusBadgeInactive]}>
-                          <Text style={[styles.statusText, active ? styles.statusTextActive : styles.statusTextInactive]}>
-                            {active ? t.active : t.inactive}
-                          </Text>
-                        </View>
-                      </View>
-                      <Text numberOfLines={1} style={[styles.petDetails, isArabic && styles.textRtl]}>
-                        {[pet.age || null, pet.breed_size_category || null, pet.health_status || null].filter(Boolean).join(' · ')}
-                      </Text>
-                      {!!plan && <Text numberOfLines={1} style={[styles.planText, isArabic && styles.textRtl]}>{plan}</Text>}
-                    </View>
-                    <PetAvatar pet={pet} />
-                  </View>
-                  <View style={styles.divider} />
-                  <View style={[styles.petFooter, isArabic && styles.rowRtl]}>
-                    <Pressable style={[styles.manageButton, isArabic && styles.rowRtl]} onPress={() => openEditPet(pet)}>
-                      <Ionicons name={isArabic ? 'chevron-back' : 'chevron-forward'} size={17} color={COLORS.primary} />
-                      <Text style={styles.manageText}>{t.manage}</Text>
-                    </Pressable>
-                    <View style={[styles.nextOrder, isArabic && styles.rowRtl]}>
-                      <Text style={styles.nextLabel}>{t.next} <Text style={styles.nextDate}>{nextDate || t.none}</Text></Text>
-                      <Ionicons name="calendar-clear-outline" size={19} color={COLORS.primary} />
-                    </View>
-                  </View>
-                </View>
-              );
-            })}
+            {pets.map((pet) => (<PetGridCard key={pet.id} pet={pet as ExtendedPet} t={t} isArabic={isArabic} isCompact={isCompact} onManage={() => openManagePet(pet)} onEditSubscription={() => openEditSubscription(pet)}/>))}
 
-          </View>
-
-        )}
+          </View>)}
 
       </ScrollView>
 
-    </SafeAreaView>
-  );
-
+    </SafeAreaView>);
 }
-
-
-/*
-|--------------------------------------------------------------------------
-| PET AVATAR
-|--------------------------------------------------------------------------
-*/
-
-function PetAvatar({
-  pet,
-}: {
-  pet: Pet;
+function getPetData(pet: ExtendedPet, t: any) {
+    const active = pet.subscription_status ===
+        "active";
+    const nextDate = pet.next_order
+        ?.scheduled_for ||
+        null;
+    const sourceOrder = pet.next_order ||
+        pet.orders?.[0];
+    const recipe = sourceOrder
+        ?.items?.[0]
+        ?.recipe?.name ||
+        null;
+    const meals = sourceOrder
+        ?.items?.reduce((total: number, item: any) => total +
+        Number(item.quantity || 0), 0) || 0;
+    const plan = recipe
+        ? `${recipe}${meals
+            ? ` (${meals} ${t.meals})`
+            : ""}`
+        : null;
+    const details = [
+        pet.breed_size_category ||
+            null,
+        pet.age ||
+            null,
+        pet.health_status ||
+            null,
+    ]
+        .filter(Boolean);
+    return {
+        active,
+        nextDate,
+        plan,
+        details,
+    };
+}
+function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, onEditSubscription, }: {
+    pet: ExtendedPet;
+    t: any;
+    isArabic: boolean;
+    isCompact: boolean;
+    isLast: boolean;
+    onManage: () => void;
+    onEditSubscription: () => void;
 }) {
+    const { active, nextDate, plan, details, } = getPetData(pet, t);
+    return (<View style={[
+            styles.listPet,
+            !isLast &&
+                styles.listPetBorder,
+        ]}>
 
-  if (pet.photo_url) {
+      
 
-    return (
-      <View
-        style={styles.petAvatar}
-      >
-        <Image
-          source={{
-            uri: pet.photo_url,
-          }}
-          style={
-            styles.petAvatarImage
-          }
-          resizeMode="cover"
-        />
+      <View style={[
+            styles.listPetTop,
+            isCompact &&
+                styles.listPetTopCompact,
+            isArabic &&
+                styles.rowRtl,
+        ]}>
+
+        <PetAvatar pet={pet} mode="list" isCompact={isCompact}/>
+
+        <View style={styles.listPetContent}>
+
+          <View style={[
+            styles.nameStatusRow,
+            isArabic &&
+                styles.rowRtl,
+        ]}>
+
+            <Text numberOfLines={1} style={[
+            styles.listPetName,
+            isCompact &&
+                styles.listPetNameCompact,
+            isArabic &&
+                styles.textRtl,
+        ]}>
+
+              {pet.name ||
+            t.unknown}
+
+            </Text>
+
+            <View style={[
+            styles.statusInline,
+            isArabic &&
+                styles.rowRtl,
+        ]}>
+
+              <View style={[
+            styles.statusDot,
+            !active &&
+                styles.statusDotInactive,
+        ]}/>
+
+              <Text style={styles.statusText}>
+
+                {active
+            ? t.active
+            : t.inactive}
+
+              </Text>
+
+            </View>
+
+          </View>
+
+          {details.map((detail, index) => (<Text key={index} style={[
+                styles.petDetailText,
+                isCompact &&
+                    styles.petDetailTextCompact,
+                isArabic &&
+                    styles.textRtl,
+            ]}>
+
+                {detail}
+
+              </Text>))}
+
+          {!!plan && (<Text numberOfLines={isCompact
+                ? 2
+                : 1} style={[
+                styles.listPlan,
+                isCompact &&
+                    styles.listPlanCompact,
+                isArabic &&
+                    styles.textRtl,
+            ]}>
+
+              {plan}
+
+            </Text>)}
+
+        </View>
+
       </View>
-    );
 
-  }
+      
 
+      <View style={[
+            styles.nextRow,
+            isArabic &&
+                styles.rowRtl,
+        ]}>
 
-  const species =
-    pet.species
-      ?.trim()
-      .toLowerCase();
+        <Ionicons name="calendar-clear-outline" size={18} color={COLORS.primary}/>
 
+        <Text style={styles.nextLabel}>
 
-  const isCat =
-    species === 'cat';
+          {t.next}{" "}
 
+          <Text style={styles.nextDate}>
 
-  const isDog =
-    species === 'dog';
+            {nextDate ||
+            t.none}
 
+          </Text>
 
-  return (
-    <View
-      style={
-        styles.petAvatarFallback
-      }
-    >
-      <MaterialCommunityIcons
-        name={
-          isCat
-            ? 'cat'
-            : isDog
-              ? 'dog'
-              : 'paw'
-        }
-        size={34}
-        color={COLORS.primary}
-      />
-    </View>
-  );
+        </Text>
 
+      </View>
+
+      
+
+      <View style={[
+            styles.listActions,
+            isCompact &&
+                styles.listActionsCompact,
+            isArabic &&
+                styles.rowRtl,
+        ]}>
+
+        <Pressable onPress={onManage} style={[
+            styles.actionButton,
+            isArabic &&
+                styles.rowRtl,
+        ]}>
+
+          <Ionicons name={isArabic
+            ? "arrow-back"
+            : "arrow-forward"} size={18} color={COLORS.primary}/>
+
+          <Text style={[
+            styles.actionText,
+            isCompact &&
+                styles.actionTextCompact,
+        ]}>
+
+            {t.manage}
+
+          </Text>
+
+        </Pressable>
+
+        <Pressable onPress={onEditSubscription} style={[
+            styles.actionButton,
+            isArabic &&
+                styles.rowRtl,
+        ]}>
+
+          <Ionicons name="pencil-outline" size={18} color={COLORS.primary}/>
+
+          <Text numberOfLines={1} style={[
+            styles.actionText,
+            isCompact &&
+                styles.actionTextCompact,
+        ]}>
+
+            {t.editSubscription}
+
+          </Text>
+
+        </Pressable>
+
+      </View>
+
+    </View>);
 }
+function PetGridCard({ pet, t, isArabic, isCompact, onManage, onEditSubscription, }: {
+    pet: ExtendedPet;
+    t: any;
+    isArabic: boolean;
+    isCompact: boolean;
+    onManage: () => void;
+    onEditSubscription: () => void;
+}) {
+    const { active, nextDate, plan, details, } = getPetData(pet, t);
+    return (<View style={[
+            styles.gridCard,
+            isCompact &&
+                styles.gridCardCompact,
+        ]}>
 
+      <PetAvatar pet={pet} mode="grid" isCompact={isCompact}/>
 
-/*
-|--------------------------------------------------------------------------
-| STYLES
-|--------------------------------------------------------------------------
-*/
+      <Text numberOfLines={1} style={[
+            styles.gridPetName,
+            isCompact &&
+                styles.gridPetNameCompact,
+            isArabic &&
+                styles.textRtl,
+        ]}>
 
-const styles =
-  StyleSheet.create({
+        {pet.name ||
+            t.unknown}
 
+      </Text>
+
+      <Text style={[
+            styles.gridStatus,
+            isArabic &&
+                styles.textRtl,
+        ]}>
+
+        {active
+            ? t.active
+            : t.inactive}
+
+      </Text>
+
+      <View style={styles.gridDetails}>
+
+        {details.map((detail, index) => (<Text key={index} style={[
+                styles.petDetailText,
+                isCompact &&
+                    styles.petDetailTextCompact,
+                isArabic &&
+                    styles.textRtl,
+            ]}>
+
+              {detail}
+
+            </Text>))}
+
+      </View>
+
+      {!!plan && (<Text style={[
+                styles.gridPlan,
+                isCompact &&
+                    styles.gridPlanCompact,
+                isArabic &&
+                    styles.textRtl,
+            ]}>
+
+          {plan}
+
+        </Text>)}
+
+      <View style={styles.gridDivider}/>
+
+      <View style={[
+            styles.nextRow,
+            isArabic &&
+                styles.rowRtl,
+        ]}>
+
+        <Ionicons name="calendar-clear-outline" size={17} color={COLORS.primary}/>
+
+        <Text numberOfLines={1} style={styles.nextLabel}>
+
+          {t.next}{" "}
+
+          <Text style={styles.nextDate}>
+
+            {nextDate ||
+            t.none}
+
+          </Text>
+
+        </Text>
+
+      </View>
+
+      <Pressable onPress={onManage} style={[
+            styles.gridAction,
+            isArabic &&
+                styles.rowRtl,
+        ]}>
+
+        <Ionicons name={isArabic
+            ? "arrow-back"
+            : "arrow-forward"} size={18} color={COLORS.primary}/>
+
+        <Text style={[
+            styles.actionText,
+            isCompact &&
+                styles.actionTextCompact,
+        ]}>
+
+          {t.manage}
+
+        </Text>
+
+      </Pressable>
+
+      <Pressable onPress={onEditSubscription} style={[
+            styles.gridAction,
+            isArabic &&
+                styles.rowRtl,
+        ]}>
+
+        <Ionicons name="pencil-outline" size={18} color={COLORS.primary}/>
+
+        <Text numberOfLines={2} style={[
+            styles.actionText,
+            isCompact &&
+                styles.actionTextCompact,
+        ]}>
+
+          {t.editSubscription}
+
+        </Text>
+
+      </Pressable>
+
+    </View>);
+}
+function PetAvatar({ pet, mode, isCompact, }: {
+    pet: Pet;
+    mode: ViewMode;
+    isCompact: boolean;
+}) {
+    const containerStyle = mode === "grid"
+        ? styles.gridAvatar
+        : [
+            styles.listAvatar,
+            isCompact &&
+                styles.listAvatarCompact,
+        ];
+    if (pet.photo_url) {
+        return (<View style={containerStyle}>
+
+        <Image source={{
+                uri: pet.photo_url,
+            }} style={styles.avatarImage} resizeMode="cover"/>
+
+      </View>);
+    }
+    const species = pet.species
+        ?.trim()
+        .toLowerCase();
+    const icon = species === "cat"
+        ? "cat"
+        : species === "dog"
+            ? "dog"
+            : "paw";
+    return (<View style={[
+            containerStyle,
+            styles.avatarFallback,
+        ]}>
+
+      <MaterialCommunityIcons name={icon} size={mode === "grid"
+            ? 42
+            : 34} color={COLORS.primary}/>
+
+    </View>);
+}
+const styles = StyleSheet.create({
     safeArea: {
-      flex: 1,
-      backgroundColor:
-        COLORS.background,
+        flex: 1,
+        backgroundColor: COLORS.background,
     },
-
-
+    scrollView: {
+        flex: 1,
+    },
     page: {
-      paddingHorizontal: 14,
-      paddingTop: 12,
-      paddingBottom: 28,
+        paddingHorizontal: 30,
+        paddingTop: 28,
+        paddingBottom: 32,
     },
-
-
+    pageCompact: {
+        paddingHorizontal: 28,
+        paddingTop: 27,
+    },
     loader: {
-      flex: 1,
-      alignItems: 'center',
-      justifyContent: 'center',
+        flex: 1,
+        alignItems: "center",
+        justifyContent: "center",
     },
-
-
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent:
-        'space-between',
-      gap: 10,
-      marginBottom: 12,
+    pageHeader: {
+        marginBottom: 20,
     },
-
-
-    headerContent: {
-      flex: 1,
-    },
-
-
     title: {
-      fontFamily:
-        'Cairo_800ExtraBold',
-      fontSize: 23,
-      lineHeight: 31,
-      color: COLORS.text,
+        fontFamily: "Cairo_800ExtraBold",
+        fontSize: 34,
+        lineHeight: 43,
+        color: COLORS.text,
     },
-
-
+    titleCompact: {
+        fontSize: 33,
+        lineHeight: 42,
+    },
     subtitle: {
-      marginTop: 0,
-      fontFamily:
-        'Cairo_400Regular',
-      fontSize: 11,
-      lineHeight: 17,
-      color: COLORS.muted,
+        marginTop: 2,
+        fontFamily: "Cairo_400Regular",
+        fontSize: 15,
+        lineHeight: 23,
+        color: COLORS.muted,
     },
-
-
+    subtitleCompact: {
+        fontSize: 14,
+        lineHeight: 22,
+    },
+    toolbar: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+        marginBottom: 21,
+    },
+    toolbarCompact: {
+        flexDirection: "column",
+        alignItems: "stretch",
+        gap: 7,
+        marginBottom: 23,
+    },
+    renewButton: {
+        height: 55,
+        paddingHorizontal: 16,
+        borderRadius: 9,
+        backgroundColor: COLORS.dark,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 10,
+        flexShrink: 1,
+    },
+    renewButtonText: {
+        fontFamily: "Cairo_700Bold",
+        fontSize: 12,
+        color: "#FFFFFF",
+    },
     addButton: {
-      minHeight: 38,
-      paddingHorizontal: 11,
-      borderRadius: 12,
-      backgroundColor:
-        COLORS.primary,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 4,
+        height: 55,
+        paddingHorizontal: 15,
+        borderRadius: 9,
+        borderWidth: 1,
+        borderColor: "#B9DCD5",
+        backgroundColor: "#EDF4F1",
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        flexShrink: 1,
     },
-
-
     addButtonText: {
-      fontFamily:
-        'Cairo_700Bold',
-      fontSize: 11,
-      color: COLORS.white,
+        fontFamily: "Cairo_700Bold",
+        fontSize: 12,
+        color: COLORS.text,
     },
-
-
-    textRtl: {
-      textAlign: 'right',
-      writingDirection: 'rtl',
+    fullWidthButton: {
+        width: "100%",
+        flexShrink: 0,
     },
-
-
-    rowRtl: {
-      flexDirection:
-        'row-reverse',
+    viewSwitcher: {
+        height: 55,
+        padding: 4,
+        borderRadius: 9,
+        backgroundColor: "#E9E6E0",
+        flexDirection: "row",
+        alignItems: "center",
     },
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | COMPACT PET LIST
-    |--------------------------------------------------------------------------
-    */
-
-    list: { gap: 16 },
-    petCard: { minHeight: 180, backgroundColor: COLORS.white, borderRadius: 24, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 14, borderWidth: 1, borderColor: COLORS.border, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.05, shadowRadius: 7, elevation: 2 },
-    petTopRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 16 },
-    petInfo: { flex: 1, minWidth: 0 },
-    nameStatusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, minHeight: 32 },
-    petName: { flexShrink: 1, fontFamily: 'Cairo_700Bold', fontSize: 20, lineHeight: 30, color: COLORS.text },
-    statusBadge: { minHeight: 28, paddingHorizontal: 12, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-    statusBadgeActive: { backgroundColor: COLORS.primaryLight },
-    statusBadgeInactive: { backgroundColor: '#F4F0EC' },
-    statusText: { fontFamily: 'Cairo_700Bold', fontSize: 11, lineHeight: 18 },
-    statusTextActive: { color: COLORS.primary },
-    statusTextInactive: { color: COLORS.muted },
-    petDetails: { marginTop: 3, fontFamily: 'Cairo_400Regular', fontSize: 13, lineHeight: 21, color: COLORS.muted },
-    planText: { marginTop: 8, fontFamily: 'Cairo_500Medium', fontSize: 13, lineHeight: 21, color: COLORS.primary },
-    petAvatar: { width: 98, height: 98, borderRadius: 22, overflow: 'hidden', backgroundColor: COLORS.primaryLight, flexShrink: 0 },
-    petAvatarImage: { width: '100%', height: '100%' },
-    petAvatarFallback: { width: 98, height: 98, borderRadius: 22, backgroundColor: COLORS.primaryLight, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-    divider: { height: 1, backgroundColor: COLORS.border, marginTop: 16, marginBottom: 11 },
-    petFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-    manageButton: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 30 },
-    manageText: { fontFamily: 'Cairo_600SemiBold', fontSize: 13, lineHeight: 20, color: COLORS.primary },
-    nextOrder: { flexDirection: 'row', alignItems: 'center', gap: 7, minWidth: 0 },
-    nextLabel: { fontFamily: 'Cairo_400Regular', fontSize: 12, lineHeight: 19, color: COLORS.muted },
-    nextDate: { fontFamily: 'Cairo_700Bold', color: COLORS.muted },
-
-    /*
-    |--------------------------------------------------------------------------
-    | EMPTY
-    |--------------------------------------------------------------------------
-    */
-
+    viewSwitcherCompact: {
+        alignSelf: "flex-start",
+        marginTop: 0,
+    },
+    viewButton: {
+        width: 42,
+        height: 47,
+        borderRadius: 7,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    viewButtonActive: {
+        backgroundColor: "#FCFAF6",
+        shadowColor: "#000",
+        shadowOffset: {
+            width: 0,
+            height: 1,
+        },
+        shadowOpacity: 0.06,
+        shadowRadius: 2,
+        elevation: 1,
+    },
+    buttonPressed: {
+        opacity: 0.7,
+    },
+    toolbarDivider: {
+        height: 1,
+        backgroundColor: COLORS.border,
+        marginBottom: 29,
+    },
+    toolbarDividerCompact: {
+        marginTop: 0,
+        marginBottom: 29,
+    },
+    listContainer: {
+        width: "100%",
+    },
+    listPet: {
+        paddingBottom: 35,
+        marginBottom: 29,
+    },
+    listPetBorder: {
+        borderBottomWidth: 1,
+        borderBottomColor: COLORS.border,
+    },
+    listPetTop: {
+        flexDirection: "row",
+        alignItems: "flex-start",
+        gap: 22,
+    },
+    listPetTopCompact: {
+        gap: 17,
+    },
+    listAvatar: {
+        width: 105,
+        height: 117,
+        borderRadius: 9,
+        overflow: "hidden",
+        backgroundColor: COLORS.primaryLight,
+        borderWidth: 2,
+        borderColor: "#FFFFFF",
+        flexShrink: 0,
+    },
+    listAvatarCompact: {
+        width: 105,
+        height: 117,
+    },
+    listPetContent: {
+        flex: 1,
+        minWidth: 0,
+    },
+    nameStatusRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 7,
+    },
+    listPetName: {
+        flexShrink: 1,
+        fontFamily: "Cairo_700Bold",
+        fontSize: 30,
+        lineHeight: 38,
+        color: COLORS.text,
+    },
+    listPetNameCompact: {
+        fontSize: 29,
+        lineHeight: 37,
+    },
+    statusInline: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 7,
+        flexShrink: 0,
+    },
+    statusDot: {
+        width: 7,
+        height: 7,
+        borderRadius: 4,
+        backgroundColor: COLORS.primary,
+    },
+    statusDotInactive: {
+        backgroundColor: COLORS.muted,
+    },
+    statusText: {
+        fontFamily: "Cairo_500Medium",
+        fontSize: 12,
+        color: COLORS.text,
+    },
+    petDetailText: {
+        fontFamily: "Cairo_400Regular",
+        fontSize: 15,
+        lineHeight: 24,
+        color: COLORS.muted,
+    },
+    petDetailTextCompact: {
+        fontSize: 14,
+        lineHeight: 23,
+    },
+    listPlan: {
+        marginTop: 7,
+        fontFamily: "Cairo_500Medium",
+        fontSize: 14,
+        lineHeight: 22,
+        color: COLORS.text,
+    },
+    listPlanCompact: {
+        fontSize: 13.5,
+        lineHeight: 21,
+    },
+    nextRow: {
+        marginTop: 20,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+    },
+    nextLabel: {
+        flexShrink: 1,
+        fontFamily: "Cairo_400Regular",
+        fontSize: 13,
+        lineHeight: 20,
+        color: COLORS.muted,
+    },
+    nextDate: {
+        fontFamily: "Cairo_700Bold",
+        color: COLORS.muted,
+    },
+    listActions: {
+        marginTop: 24,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 16,
+    },
+    listActionsCompact: {
+        gap: 10,
+    },
+    actionButton: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 9,
+        minHeight: 32,
+        flexShrink: 1,
+    },
+    actionText: {
+        fontFamily: "Cairo_700Bold",
+        fontSize: 15,
+        lineHeight: 22,
+        color: COLORS.text,
+    },
+    actionTextCompact: {
+        fontSize: 14,
+        lineHeight: 21,
+    },
+    gridContainer: {
+        flexDirection: "row",
+        flexWrap: "wrap",
+        justifyContent: "space-between",
+        alignItems: "flex-start",
+        rowGap: 16,
+    },
+    gridCard: {
+        width: "48%",
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        borderRadius: 15,
+        padding: 18,
+        backgroundColor: "transparent",
+    },
+    gridCardCompact: {
+        width: "48%",
+        padding: 16,
+        borderRadius: 14,
+    },
+    gridAvatar: {
+        width: "100%",
+        aspectRatio: 1,
+        borderRadius: 14,
+        overflow: "hidden",
+        backgroundColor: COLORS.primaryLight,
+        borderWidth: 2,
+        borderColor: "#FFFFFF",
+    },
+    avatarImage: {
+        width: "100%",
+        height: "100%",
+    },
+    avatarFallback: {
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    gridPetName: {
+        marginTop: 19,
+        fontFamily: "Cairo_700Bold",
+        fontSize: 23,
+        lineHeight: 30,
+        color: COLORS.text,
+    },
+    gridPetNameCompact: {
+        marginTop: 15,
+        fontSize: 21,
+        lineHeight: 28,
+    },
+    gridStatus: {
+        marginTop: 1,
+        fontFamily: "Cairo_500Medium",
+        fontSize: 13,
+        lineHeight: 20,
+        color: COLORS.text,
+    },
+    gridDetails: {
+        marginTop: 15,
+    },
+    gridPlan: {
+        marginTop: 10,
+        minHeight: 46,
+        fontFamily: "Cairo_500Medium",
+        fontSize: 14,
+        lineHeight: 22,
+        color: COLORS.text,
+    },
+    gridPlanCompact: {
+        fontSize: 13,
+        lineHeight: 20,
+        minHeight: 42,
+    },
+    gridDivider: {
+        height: 1,
+        backgroundColor: COLORS.border,
+        marginTop: 12,
+    },
+    gridAction: {
+        marginTop: 21,
+        minHeight: 29,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 9,
+    },
     emptyBox: {
-      minHeight: 260,
-      backgroundColor:
-        COLORS.white,
-      borderRadius: 20,
-      borderWidth: 1,
-      borderColor:
-        COLORS.border,
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: 24,
+        minHeight: 260,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        borderRadius: 16,
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
     },
-
-
     emptyIcon: {
-      width: 70,
-      height: 70,
-      borderRadius: 35,
-      backgroundColor:
-        COLORS.primaryLight,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginBottom: 12,
+        width: 70,
+        height: 70,
+        borderRadius: 35,
+        backgroundColor: COLORS.primaryLight,
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 12,
     },
-
-
     emptyTitle: {
-      fontFamily:
-        'Cairo_700Bold',
-      fontSize: 15,
-      color: COLORS.text,
-      textAlign: 'center',
+        fontFamily: "Cairo_700Bold",
+        fontSize: 17,
+        color: COLORS.text,
+        textAlign: "center",
     },
-
-
     emptyText: {
-      marginTop: 3,
-      fontFamily:
-        'Cairo_400Regular',
-      fontSize: 11,
-      lineHeight: 18,
-      color: COLORS.muted,
-      textAlign: 'center',
+        marginTop: 5,
+        fontFamily: "Cairo_400Regular",
+        fontSize: 13,
+        lineHeight: 20,
+        color: COLORS.muted,
+        textAlign: "center",
     },
-
-
     emptyButton: {
-      marginTop: 15,
-      minHeight: 42,
-      paddingHorizontal: 16,
-      borderRadius: 13,
-      backgroundColor:
-        COLORS.primary,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
+        marginTop: 18,
+        minHeight: 45,
+        paddingHorizontal: 18,
+        borderRadius: 9,
+        backgroundColor: COLORS.dark,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 7,
     },
-
-
     emptyButtonText: {
-      fontFamily:
-        'Cairo_700Bold',
-      fontSize: 11,
-      color: COLORS.white,
+        fontFamily: "Cairo_700Bold",
+        fontSize: 12,
+        color: "#FFFFFF",
     },
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | ERROR
-    |--------------------------------------------------------------------------
-    */
-
     errorBox: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      padding: 10,
-      marginBottom: 10,
-      borderRadius: 12,
-      backgroundColor:
-        COLORS.dangerLight,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+        padding: 10,
+        marginBottom: 15,
+        borderRadius: 10,
+        backgroundColor: COLORS.dangerLight,
     },
-
-
     errorText: {
-      flex: 1,
-      fontFamily:
-        'Cairo_500Medium',
-      fontSize: 11,
-      color: COLORS.danger,
+        flex: 1,
+        fontFamily: "Cairo_500Medium",
+        fontSize: 11,
+        color: COLORS.danger,
     },
+    rowRtl: {
+        flexDirection: "row-reverse",
+    },
+    textRtl: {
+        textAlign: "right",
+        writingDirection: "rtl",
+    },
+});
 
-  });

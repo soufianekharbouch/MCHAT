@@ -21,7 +21,12 @@ import {
 
 import {
   Ionicons,
+  MaterialCommunityIcons,
 } from "@expo/vector-icons";
+
+import {
+  router,
+} from "expo-router";
 
 import {
   dismissNotificationSafe,
@@ -36,32 +41,13 @@ import {
 
 
 const COLORS = {
-  background:
-    "#F7F4EF",
-
-  primary:
-    "#249B97",
-
-  coral:
-    "#EB6268",
-
-  text:
-    "#272727",
-
-  muted:
-    "#77736D",
-
-  white:
-    "#FFFFFF",
-
-  border:
-    "#E5E0D9",
-
-  unreadBg:
-    "#ECF8F7",
-
-  unreadBorder:
-    "#BFE5E2",
+  background: "#F7F4EF",
+  primary: "#249B97",
+  coral: "#EB6268",
+  text: "#272727",
+  muted: "#77736D",
+  border: "#DDD5CA",
+  danger: "#B42318",
 };
 
 
@@ -71,7 +57,6 @@ export default function NotificationsScreen() {
     isArabic,
   } = useAppLanguage();
 
-
   const [
     notifications,
     setNotifications,
@@ -80,20 +65,17 @@ export default function NotificationsScreen() {
       MobileNotification[]
     >([]);
 
-
   const [
     loading,
     setLoading,
   ] =
     useState(true);
 
-
   const [
     refreshing,
     setRefreshing,
   ] =
     useState(false);
-
 
   const [
     error,
@@ -103,7 +85,6 @@ export default function NotificationsScreen() {
       string | null
     >(null);
 
-
   const [
     removingId,
     setRemovingId,
@@ -112,78 +93,53 @@ export default function NotificationsScreen() {
       number | null
     >(null);
 
-
   const t =
     isArabic
       ? {
           title:
             "الإشعارات",
-
-          subtitle:
-            "تابع آخر التنبيهات والمستجدات",
-
+          back:
+            "رجوع",
+          markAllRead:
+            "تحديد الكل كمقروء",
           empty:
             "لا توجد إشعارات حالياً",
-
           error:
             "تعذر تحميل الإشعارات",
-
-          new:
-            "جديد",
-
           read:
-            "تمت القراءة",
-
+            "مقروء",
           deleteTitle:
             "حذف الإشعار",
-
           deleteMessage:
             "هل تريد إزالة هذا الإشعار؟",
-
           cancel:
             "إلغاء",
-
           remove:
             "حذف",
         }
       : {
           title:
             "Notifications",
-
-          subtitle:
-            "Stay updated with your latest notifications",
-
+          back:
+            "Back",
+          markAllRead:
+            "Mark All as Read",
           empty:
             "No notifications yet",
-
           error:
             "Unable to load notifications",
-
-          new:
-            "New",
-
           read:
             "Read",
-
           deleteTitle:
             "Remove notification",
-
           deleteMessage:
             "Do you want to remove this notification?",
-
           cancel:
             "Cancel",
-
           remove:
             "Remove",
         };
 
-
-  /*
-  |--------------------------------------------------------------------------
-  | TITLE
-  |--------------------------------------------------------------------------
-  */
 
   const getNotificationTitle = (
     notification:
@@ -193,13 +149,10 @@ export default function NotificationsScreen() {
     if (
       notification.title
     ) {
-
       return notification.title;
     }
 
-
     if (isArabic) {
-
       return (
         notification.title_ar
         ||
@@ -208,7 +161,6 @@ export default function NotificationsScreen() {
         ""
       );
     }
-
 
     return (
       notification.title_en
@@ -220,12 +172,6 @@ export default function NotificationsScreen() {
   };
 
 
-  /*
-  |--------------------------------------------------------------------------
-  | BODY
-  |--------------------------------------------------------------------------
-  */
-
   const getNotificationBody = (
     notification:
       MobileNotification
@@ -234,13 +180,10 @@ export default function NotificationsScreen() {
     if (
       notification.body
     ) {
-
       return notification.body;
     }
 
-
     if (isArabic) {
-
       return (
         notification.body_ar
         ||
@@ -249,7 +192,6 @@ export default function NotificationsScreen() {
         ""
       );
     }
-
 
     return (
       notification.body_en
@@ -261,12 +203,6 @@ export default function NotificationsScreen() {
   };
 
 
-  /*
-  |--------------------------------------------------------------------------
-  | DATE
-  |--------------------------------------------------------------------------
-  */
-
   const formatDate = (
     value?:
       string | null
@@ -276,22 +212,95 @@ export default function NotificationsScreen() {
       return "";
     }
 
-
     const date =
-      new Date(
-        value
-      );
-
+      new Date(value);
 
     if (
       Number.isNaN(
         date.getTime()
       )
     ) {
-
       return value;
     }
 
+    const now =
+      new Date();
+
+    const diffMs =
+      now.getTime() -
+      date.getTime();
+
+    const diffMinutes =
+      Math.floor(
+        diffMs /
+        60000
+      );
+
+    const diffHours =
+      Math.floor(
+        diffMs /
+        3600000
+      );
+
+    const startToday =
+      new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate()
+      );
+
+    const startDate =
+      new Date(
+        date.getFullYear(),
+        date.getMonth(),
+        date.getDate()
+      );
+
+    const diffDays =
+      Math.round(
+        (
+          startToday.getTime() -
+          startDate.getTime()
+        ) /
+        86400000
+      );
+
+    if (
+      diffMinutes >= 0 &&
+      diffMinutes < 60
+    ) {
+      if (isArabic) {
+        return diffMinutes <= 1
+          ? "الآن"
+          : `منذ ${diffMinutes} دقيقة`;
+      }
+
+      return diffMinutes <= 1
+        ? "Just now"
+        : `${diffMinutes} mins ago`;
+    }
+
+    if (
+      diffHours >= 0 &&
+      diffHours < 24 &&
+      diffDays === 0
+    ) {
+      if (isArabic) {
+        return `منذ ${diffHours} ساعة`;
+      }
+
+      return `${diffHours} ${
+        diffHours === 1
+          ? "hour"
+          : "hours"
+      } ago`;
+    }
+
+    if (diffDays === 1) {
+      return isArabic
+        ? "أمس"
+        : "Yesterday";
+    }
 
     return new Intl.DateTimeFormat(
       isArabic
@@ -300,165 +309,74 @@ export default function NotificationsScreen() {
       {
         day:
           "numeric",
-
         month:
           "short",
-
-        year:
-          "numeric",
-
-        hour:
-          "2-digit",
-
-        minute:
-          "2-digit",
       }
-    ).format(
-      date
-    );
+    ).format(date);
   };
 
 
-  /*
-  |--------------------------------------------------------------------------
-  | LOAD
-  |--------------------------------------------------------------------------
-  */
+  const loadNotifications =
+    useCallback(
+      async (
+        silent = false
+      ) => {
 
-const loadNotifications =
-  useCallback(
-    async (
-      silent = false
-    ) => {
+        try {
 
-      try {
+          if (!silent) {
+            setLoading(true);
+          }
 
-        if (!silent) {
-          setLoading(true);
-        }
+          setError(null);
 
-        setError(null);
+          const data =
+            await getNotifications();
 
-        const data =
-          await getNotifications();
-
-        const list =
-          Array.isArray(data)
-            ? data
-            : [];
-
-        /*
-        |--------------------------------------------------------------------------
-        | MARK ALL UNREAD AS VIEWED
-        |--------------------------------------------------------------------------
-        */
-
-        const unreadNotifications =
-          list.filter(
-            (
-              notification
-            ) =>
-              !notification.viewed_at
-          );
-
-        if (
-          unreadNotifications.length > 0
-        ) {
-
-          await Promise.all(
-            unreadNotifications.map(
-              (
-                notification
-              ) =>
-                markNotificationViewedSafe(
-                  notification.id
-                )
-            )
-          );
-
-          /*
-           * Mise à jour locale immédiate.
-           */
-
-          const viewedAt =
-            new Date()
-              .toISOString();
-
-          const updatedList =
-            list.map(
-              (
-                notification
-              ) => {
-
-                if (
-                  notification.viewed_at
-                ) {
-                  return notification;
-                }
-
-                return {
-                  ...notification,
-
-                  viewed_at:
-                    viewedAt,
-                };
-              }
-            );
-
-          setNotifications(
-            updatedList
-          );
-
-        } else {
+          const list =
+            Array.isArray(data)
+              ? data
+              : [];
 
           setNotifications(
             list
           );
+
+        } catch (err) {
+
+          console.error(
+            "Notifications error:",
+            err
+          );
+
+          setError(
+            err instanceof Error
+              ? err.message
+              : t.error
+          );
+
+        } finally {
+
+          setLoading(false);
+
+          setRefreshing(false);
         }
-
-      } catch (err) {
-
-        console.error(
-          "Notifications error:",
-          err
-        );
-
-        setError(
-          err instanceof Error
-            ? err.message
-            : t.error
-        );
-
-      } finally {
-
-        setLoading(false);
-
-        setRefreshing(false);
-      }
-    },
-    [
-      isArabic,
-    ]
-  );
+      },
+      [
+        isArabic,
+      ]
+    );
 
 
   useEffect(
     () => {
-
-      loadNotifications();
-
+      void loadNotifications();
     },
     [
       loadNotifications,
     ]
   );
 
-
-  /*
-  |--------------------------------------------------------------------------
-  | REFRESH
-  |--------------------------------------------------------------------------
-  */
 
   const handleRefresh =
     async () => {
@@ -467,18 +385,11 @@ const loadNotifications =
         true
       );
 
-
       await loadNotifications(
         true
       );
     };
 
-
-  /*
-  |--------------------------------------------------------------------------
-  | MARK VIEWED
-  |--------------------------------------------------------------------------
-  */
 
   const markAsViewed =
     async (
@@ -489,69 +400,53 @@ const loadNotifications =
       if (
         notification.viewed_at
       ) {
-
         return;
       }
-
 
       const viewedAt =
         new Date()
           .toISOString();
 
-
       setNotifications(
         (
           current
         ) =>
-
           current.map(
             (
               item
             ) =>
-
               item.id ===
               notification.id
-
                 ? {
                     ...item,
-
                     viewed_at:
                       viewedAt,
                   }
-
                 : item
           )
       );
-
 
       const success =
         await markNotificationViewedSafe(
           notification.id
         );
 
-
       if (!success) {
-
         setNotifications(
           (
             current
           ) =>
-
             current.map(
               (
                 item
               ) =>
-
                 item.id ===
                 notification.id
-
                   ? {
                       ...item,
-
                       viewed_at:
                         null,
                     }
-
                   : item
             )
         );
@@ -559,11 +454,73 @@ const loadNotifications =
     };
 
 
-  /*
-  |--------------------------------------------------------------------------
-  | REMOVE
-  |--------------------------------------------------------------------------
-  */
+  const markAllAsRead =
+    async () => {
+
+      const unread =
+        notifications.filter(
+          (
+            notification
+          ) =>
+            !notification
+              .viewed_at
+        );
+
+      if (
+        unread.length === 0
+      ) {
+        return;
+      }
+
+      const viewedAt =
+        new Date()
+          .toISOString();
+
+      setNotifications(
+        (
+          current
+        ) =>
+          current.map(
+            (
+              notification
+            ) =>
+              notification
+                .viewed_at
+                ? notification
+                : {
+                    ...notification,
+                    viewed_at:
+                      viewedAt,
+                  }
+          )
+      );
+
+      const results =
+        await Promise.all(
+          unread.map(
+            (
+              notification
+            ) =>
+              markNotificationViewedSafe(
+                notification.id
+              )
+          )
+        );
+
+      if (
+        results.some(
+          (
+            success
+          ) =>
+            !success
+        )
+      ) {
+        await loadNotifications(
+          true
+        );
+      }
+    };
+
 
   const removeNotification =
     async (
@@ -575,69 +532,45 @@ const loadNotifications =
         removingId !==
         null
       ) {
-
         return;
       }
-
 
       setRemovingId(
         notificationId
       );
 
-
       const original =
         notifications;
-
-
-      /*
-       * Immediate UI removal.
-       */
 
       setNotifications(
         (
           current
         ) =>
-
           current.filter(
             (
               notification
             ) =>
-
               notification.id !==
               notificationId
           )
       );
-
 
       const success =
         await dismissNotificationSafe(
           notificationId
         );
 
-
       if (!success) {
-
-        /*
-         * Restore if API fails.
-         */
-
         setNotifications(
           original
         );
       }
-
 
       setRemovingId(
         null
       );
     };
 
-
-  /*
-  |--------------------------------------------------------------------------
-  | CONFIRM REMOVE
-  |--------------------------------------------------------------------------
-  */
 
   const confirmRemove =
     (
@@ -652,22 +585,17 @@ const loadNotifications =
           {
             text:
               t.cancel,
-
             style:
               "cancel",
           },
-
           {
             text:
               t.remove,
-
             style:
               "destructive",
-
             onPress:
               () => {
-
-                removeNotification(
+                void removeNotification(
                   notificationId
                 );
               },
@@ -677,106 +605,137 @@ const loadNotifications =
     };
 
 
-  /*
-  |--------------------------------------------------------------------------
-  | COUNT
-  |--------------------------------------------------------------------------
-  */
+  const getNotificationIcon = (
+    notification:
+      MobileNotification
+  ) => {
 
-  const unreadCount =
-    notifications
-      .filter(
-        (
-          notification
-        ) =>
+    const text =
+      `${getNotificationTitle(notification)} ${getNotificationBody(notification)}`
+        .toLowerCase();
 
-          !notification
-            .viewed_at
-      )
-      .length;
+    if (
+      text.includes("delivery") ||
+      text.includes("توصيل")
+    ) {
+      return {
+        family:
+          "material" as const,
+        name:
+          "truck-outline" as const,
+      };
+    }
 
+    if (
+      text.includes("transition") ||
+      text.includes("milestone") ||
+      text.includes("انتقال")
+    ) {
+      return {
+        family:
+          "material" as const,
+        name:
+          "creation-outline" as const,
+      };
+    }
 
-  /*
-  |--------------------------------------------------------------------------
-  | LOADER
-  |--------------------------------------------------------------------------
-  */
+    if (
+      text.includes("point") ||
+      text.includes("credit") ||
+      text.includes("نقاط")
+    ) {
+      return {
+        family:
+          "material" as const,
+        name:
+          "medal-outline" as const,
+      };
+    }
+
+    if (
+      text.includes("nutrition") ||
+      text.includes("ticket") ||
+      text.includes("reply") ||
+      text.includes("تغذ")
+    ) {
+      return {
+        family:
+          "ion" as const,
+        name:
+          "headset-outline" as const,
+      };
+    }
+
+    return {
+      family:
+        "ion" as const,
+      name:
+        "notifications-outline" as const,
+    };
+  };
+
 
   if (
-    loading
-    &&
+    loading &&
     notifications.length ===
       0
   ) {
 
     return (
-
       <SafeAreaView
+        edges={[
+          "left",
+          "right",
+        ]}
         style={
           styles.safeArea
         }
       >
-
         <View
           style={
             styles.loader
           }
         >
-
           <ActivityIndicator
             size="large"
             color={
               COLORS.primary
             }
           />
-
         </View>
-
       </SafeAreaView>
     );
   }
 
 
-  /*
-  |--------------------------------------------------------------------------
-  | SCREEN
-  |--------------------------------------------------------------------------
-  */
-
   return (
-
     <SafeAreaView
+      edges={[
+        "left",
+        "right",
+      ]}
       style={
         styles.safeArea
       }
     >
-
       <ScrollView
-
         contentContainerStyle={
           styles.page
         }
-
         showsVerticalScrollIndicator={
           false
         }
-
         refreshControl={
-
           <RefreshControl
-
             refreshing={
               refreshing
             }
-
             onRefresh={
               handleRefresh
             }
-
             tintColor={
               COLORS.primary
             }
-
             colors={[
               COLORS.primary,
             ]}
@@ -784,1050 +743,596 @@ const loadNotifications =
         }
       >
 
-        {/* HEADER */}
+        <Pressable
+          style={[
+            styles.backButton,
+            isArabic &&
+              styles.rowRtl,
+          ]}
+          onPress={
+            () => router.back()
+          }
+        >
+          <Ionicons
+            name={
+              isArabic
+                ? "arrow-forward"
+                : "arrow-back"
+            }
+            size={19}
+            color={
+              COLORS.primary
+            }
+          />
+
+          <Text
+            style={
+              styles.backText
+            }
+          >
+            {t.back}
+          </Text>
+        </Pressable>
+
+
+        <Text
+          style={[
+            styles.title,
+            isArabic &&
+              styles.textRtl,
+          ]}
+        >
+          {t.title}
+        </Text>
+
 
         <View
           style={[
-            styles.header,
-
-            isArabic
-            &&
-            styles.rowRtl,
+            styles.markAllRow,
+            isArabic &&
+              styles.rowRtl,
           ]}
         >
-
-          <View
-            style={
-              styles.headerText
+          <Pressable
+            style={[
+              styles.markAllButton,
+              isArabic &&
+                styles.rowRtl,
+            ]}
+            onPress={
+              markAllAsRead
             }
           >
-
-            <Text
-              style={[
-                styles.title,
-
-                isArabic
-                &&
-                styles.textRtl,
-              ]}
-            >
-              {t.title}
-            </Text>
-
-
-            <Text
-              style={[
-                styles.subtitle,
-
-                isArabic
-                &&
-                styles.textRtl,
-              ]}
-            >
-              {t.subtitle}
-            </Text>
-
-          </View>
-
-
-          <View
-            style={
-              styles.headerIcon
-            }
-          >
-
             <Ionicons
-              name=
-                "notifications-outline"
-              size={
-                24
-              }
+              name="checkmark"
+              size={22}
               color={
                 COLORS.primary
               }
             />
 
-
-            {
-              unreadCount > 0
-              &&
-              (
-
-                <View
-                  style={
-                    styles.headerBadge
-                  }
-                >
-
-                  <Text
-                    style={
-                      styles.headerBadgeText
-                    }
-                  >
-
-                    {
-                      unreadCount > 99
-                        ? "99+"
-                        : unreadCount
-                    }
-
-                  </Text>
-
-                </View>
-              )
-            }
-
-          </View>
-
+            <Text
+              style={
+                styles.markAllText
+              }
+            >
+              {t.markAllRead}
+            </Text>
+          </Pressable>
         </View>
 
 
-        {/* ERROR */}
+        <View
+          style={
+            styles.topDivider
+          }
+        />
 
-        {
-          !!error
-          &&
-          (
 
-            <View
+        {!!error && (
+          <View
+            style={
+              styles.errorBox
+            }
+          >
+            <Ionicons
+              name="alert-circle-outline"
+              size={20}
+              color={
+                COLORS.coral
+              }
+            />
+
+            <Text
+              style={
+                styles.errorText
+              }
+            >
+              {error}
+            </Text>
+          </View>
+        )}
+
+
+        {notifications.length ===
+        0 ? (
+
+          <View
+            style={
+              styles.emptyBox
+            }
+          >
+            <Ionicons
+              name="notifications-off-outline"
+              size={34}
+              color={
+                COLORS.primary
+              }
+            />
+
+            <Text
               style={[
-                styles.errorBox,
-
-                isArabic
-                &&
-                styles.rowRtl,
+                styles.emptyText,
+                isArabic &&
+                  styles.textRtl,
               ]}
             >
+              {t.empty}
+            </Text>
+          </View>
 
-              <Ionicons
-                name=
-                  "alert-circle-outline"
-                size={
-                  20
-                }
-                color={
-                  COLORS.coral
-                }
-              />
+        ) : (
 
+          <View
+            style={
+              styles.list
+            }
+          >
+            {notifications.map(
+              (
+                notification,
+                index
+              ) => {
 
-              <Text
-                style={[
-                  styles.errorText,
+                const removing =
+                  removingId ===
+                  notification.id;
 
-                  isArabic
-                  &&
-                  styles.textRtl,
-                ]}
-              >
-                {error}
-              </Text>
+                const icon =
+                  getNotificationIcon(
+                    notification
+                  );
 
-            </View>
-          )
-        }
+                const dateText =
+                  formatDate(
+                    notification
+                      .sent_at ||
+                    notification
+                      .created_at
+                  );
 
-
-        {/* EMPTY / LIST */}
-
-        {
-          notifications.length ===
-          0
-
-            ? (
-
-              <View
-                style={
-                  styles.emptyBox
-                }
-              >
-
-                <View
-                  style={
-                    styles.emptyIcon
-                  }
-                >
-
-                  <Ionicons
-                    name=
-                      "notifications-off-outline"
-                    size={
-                      34
+                return (
+                  <Pressable
+                    key={
+                      notification.id
                     }
-                    color={
-                      COLORS.primary
+                    onPress={
+                      () =>
+                        markAsViewed(
+                          notification
+                        )
                     }
-                  />
+                    style={({
+                      pressed,
+                    }) => [
+                      styles.notificationItem,
+                      index ===
+                        notifications.length -
+                          1 &&
+                        styles.lastNotificationItem,
+                      pressed &&
+                        styles.notificationPressed,
+                      removing &&
+                        styles.notificationRemoving,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.notificationRow,
+                        isArabic &&
+                          styles.rowRtl,
+                      ]}
+                    >
 
-                </View>
+                      <View
+                        style={
+                          styles.notificationIcon
+                        }
+                      >
+                        {icon.family ===
+                        "material" ? (
+                          <MaterialCommunityIcons
+                            name={
+                              icon.name as any
+                            }
+                            size={22}
+                            color={
+                              COLORS.muted
+                            }
+                          />
+                        ) : (
+                          <Ionicons
+                            name={
+                              icon.name as any
+                            }
+                            size={21}
+                            color={
+                              COLORS.muted
+                            }
+                          />
+                        )}
+                      </View>
 
 
-                <Text
-                  style={[
-                    styles.emptyText,
-
-                    isArabic
-                    &&
-                    styles.textRtl,
-                  ]}
-                >
-                  {t.empty}
-                </Text>
-
-              </View>
-            )
-
-            : (
-
-              <View
-                style={
-                  styles.list
-                }
-              >
-
-                {
-                  notifications.map(
-                    (
-                      notification
-                    ) => {
-
-                      const unread =
-                        !notification
-                          .viewed_at;
-
-
-                      const removing =
-                        removingId ===
-                        notification.id;
-
-
-                      return (
-
-                        <Pressable
-
-                          key={
-                            notification.id
-                          }
-
-                          onPress={
-                            () =>
-                              markAsViewed(
-                                notification
-                              )
-                          }
-
-                          style={({
-                            pressed,
-                          }) => [
-
-                            styles
-                              .notificationCard,
-
-                            unread
-                            &&
-                            styles
-                              .notificationCardUnread,
-
-                            pressed
-                            &&
-                            styles
-                              .notificationCardPressed,
-
-                            removing
-                            &&
-                            styles
-                              .notificationCardRemoving,
+                      <View
+                        style={
+                          styles.notificationContent
+                        }
+                      >
+                        <Text
+                          style={[
+                            styles.notificationTitle,
+                            isArabic &&
+                              styles.textRtl,
                           ]}
                         >
+                          {getNotificationTitle(
+                            notification
+                          )}
+                        </Text>
 
-                          <View
-                            style={[
-                              styles
-                                .notificationRow,
+                        <Text
+                          style={[
+                            styles.notificationBody,
+                            isArabic &&
+                              styles.textRtl,
+                          ]}
+                        >
+                          {getNotificationBody(
+                            notification
+                          )}
+                        </Text>
 
-                              isArabic
-                              &&
-                              styles
-                                .rowRtl,
-                            ]}
-                          >
-
-                            {/* ICON */}
-
-                            <View
-                              style={[
-                                styles
-                                  .notificationIcon,
-
-                                unread
-                                &&
-                                styles
-                                  .notificationIconUnread,
-                              ]}
-                            >
-
-                              <Ionicons
-
-                                name={
-                                  unread
-                                    ? "notifications"
-                                    : "notifications-outline"
-                                }
-
-                                size={
-                                  21
-                                }
-
-                                color={
-                                  COLORS.primary
-                                }
-                              />
-
-                            </View>
-
-
-                            {/* CONTENT */}
-
-                            <View
+                        <View
+                          style={[
+                            styles.notificationMeta,
+                            isArabic &&
+                              styles.rowRtl,
+                          ]}
+                        >
+                          {!!dateText && (
+                            <Text
                               style={
-                                styles
-                                  .notificationContent
+                                styles.notificationDate
                               }
                             >
+                              {dateText}
+                            </Text>
+                          )}
 
-                              <View
-                                style={[
-                                  styles
-                                    .notificationTitleRow,
+                          {!!dateText && (
+                            <Text
+                              style={
+                                styles.metaDot
+                              }
+                            >
+                              •
+                            </Text>
+                          )}
 
-                                  isArabic
-                                  &&
-                                  styles
-                                    .rowRtl,
-                                ]}
-                              >
-
-                                <Text
-                                  style={[
-                                    styles
-                                      .notificationTitle,
-
-                                    unread
-                                    &&
-                                    styles
-                                      .notificationTitleUnread,
-
-                                    isArabic
-                                    &&
-                                    styles
-                                      .textRtl,
-                                  ]}
-                                >
-
-                                  {
-                                    getNotificationTitle(
-                                      notification
-                                    )
-                                  }
-
-                                </Text>
+                          <Text
+                            style={
+                              styles.notificationDate
+                            }
+                          >
+                            {t.read}
+                          </Text>
+                        </View>
+                      </View>
 
 
-                                {
-                                  unread
-                                  &&
-                                  (
+                      <Pressable
+                        hitSlop={12}
+                        disabled={
+                          removing
+                        }
+                        onPress={(
+                          event
+                        ) => {
+                          event
+                            .stopPropagation();
 
-                                    <View
-                                      style={
-                                        styles
-                                          .unreadDot
-                                      }
-                                    />
+                          confirmRemove(
+                            notification.id
+                          );
+                        }}
+                        style={({
+                          pressed,
+                        }) => [
+                          styles.deleteButton,
+                          pressed &&
+                            styles.deleteButtonPressed,
+                        ]}
+                      >
+                        {removing ? (
+                          <ActivityIndicator
+                            size="small"
+                            color={
+                              COLORS.muted
+                            }
+                          />
+                        ) : (
+                          <Ionicons
+                            name="trash-outline"
+                            size={19}
+                            color={
+                              COLORS.muted
+                            }
+                          />
+                        )}
+                      </Pressable>
 
-                                  )
-                                }
+                    </View>
+                  </Pressable>
+                );
+              }
+            )}
+          </View>
 
-
-                                {/* REMOVE */}
-
-                                <Pressable
-
-                                  hitSlop={
-                                    12
-                                  }
-
-                                  disabled={
-                                    removing
-                                  }
-
-                                  onPress={(
-                                    event
-                                  ) => {
-
-                                    event
-                                      .stopPropagation();
-
-
-                                    confirmRemove(
-                                      notification.id
-                                    );
-                                  }}
-
-                                  style={({
-                                    pressed,
-                                  }) => [
-
-                                    styles
-                                      .deleteButton,
-
-                                    pressed
-                                    &&
-                                    styles
-                                      .deleteButtonPressed,
-                                  ]}
-                                >
-
-                                  {
-                                    removing
-                                      ? (
-
-                                        <ActivityIndicator
-                                          size="small"
-                                          color={
-                                            COLORS.muted
-                                          }
-                                        />
-
-                                      )
-                                      : (
-
-                                        <Ionicons
-                                          name=
-                                            "close"
-                                          size={
-                                            18
-                                          }
-                                          color={
-                                            COLORS.muted
-                                          }
-                                        />
-
-                                      )
-                                  }
-
-                                </Pressable>
-
-                              </View>
-
-
-                              <Text
-                                style={[
-                                  styles
-                                    .notificationBody,
-
-                                  isArabic
-                                  &&
-                                  styles
-                                    .textRtl,
-                                ]}
-                              >
-
-                                {
-                                  getNotificationBody(
-                                    notification
-                                  )
-                                }
-
-                              </Text>
-
-
-                              <View
-                                style={[
-                                  styles
-                                    .notificationFooter,
-
-                                  isArabic
-                                  &&
-                                  styles
-                                    .rowRtl,
-                                ]}
-                              >
-
-                                <Text
-                                  style={
-                                    styles
-                                      .notificationDate
-                                  }
-                                >
-
-                                  {
-                                    formatDate(
-                                      notification
-                                        .sent_at
-                                      ||
-                                      notification
-                                        .created_at
-                                    )
-                                  }
-
-                                </Text>
-
-
-                                <View
-                                  style={[
-                                    styles
-                                      .statusBadge,
-
-                                    unread
-                                      ? styles
-                                          .statusBadgeUnread
-                                      : styles
-                                          .statusBadgeRead,
-                                  ]}
-                                >
-
-                                  <Text
-                                    style={[
-                                      styles
-                                        .statusBadgeText,
-
-                                      unread
-                                        ? styles
-                                            .statusBadgeTextUnread
-                                        : styles
-                                            .statusBadgeTextRead,
-                                    ]}
-                                  >
-
-                                    {
-                                      unread
-                                        ? t.new
-                                        : t.read
-                                    }
-
-                                  </Text>
-
-                                </View>
-
-                              </View>
-
-                            </View>
-
-                          </View>
-
-                        </Pressable>
-                      );
-                    }
-                  )
-                }
-
-              </View>
-            )
-        }
+        )}
 
       </ScrollView>
-
     </SafeAreaView>
   );
 }
 
-
-/*
-|--------------------------------------------------------------------------
-| STYLES
-|--------------------------------------------------------------------------
-*/
 
 const styles =
   StyleSheet.create({
 
     safeArea: {
       flex: 1,
-
       backgroundColor:
         COLORS.background,
     },
 
-
     page: {
-      padding: 18,
-
-      paddingBottom: 35,
+      paddingHorizontal: 24,
+      paddingTop: 36,
+      paddingBottom: 60,
     },
-
 
     loader: {
       flex: 1,
-
       alignItems:
         "center",
-
       justifyContent:
         "center",
     },
-
-
-    header: {
-      flexDirection:
-        "row",
-
-      alignItems:
-        "center",
-
-      justifyContent:
-        "space-between",
-
-      marginBottom: 20,
-
-      gap: 15,
-    },
-
-
-    headerText: {
-      flex: 1,
-    },
-
-
-    title: {
-      fontFamily:
-        "Cairo_800ExtraBold",
-
-      fontSize: 25,
-
-      lineHeight: 36,
-
-      color:
-        COLORS.text,
-    },
-
-
-    subtitle: {
-      marginTop: 2,
-
-      fontFamily:
-        "Cairo_400Regular",
-
-      fontSize: 13,
-
-      lineHeight: 22,
-
-      color:
-        COLORS.muted,
-    },
-
-
-    headerIcon: {
-      width: 50,
-
-      height: 50,
-
-      borderRadius: 17,
-
-      backgroundColor:
-        COLORS.white,
-
-      borderWidth: 1,
-
-      borderColor:
-        COLORS.border,
-
-      alignItems:
-        "center",
-
-      justifyContent:
-        "center",
-
-      position:
-        "relative",
-    },
-
-
-    headerBadge: {
-      position:
-        "absolute",
-
-      top: -5,
-
-      right: -5,
-
-      minWidth: 21,
-
-      height: 21,
-
-      borderRadius: 11,
-
-      paddingHorizontal: 4,
-
-      backgroundColor:
-        COLORS.coral,
-
-      alignItems:
-        "center",
-
-      justifyContent:
-        "center",
-
-      borderWidth: 2,
-
-      borderColor:
-        COLORS.background,
-    },
-
-
-    headerBadgeText: {
-      fontFamily:
-        "Cairo_700Bold",
-
-      fontSize: 8,
-
-      lineHeight: 12,
-
-      color:
-        COLORS.white,
-    },
-
-
-    textRtl: {
-      textAlign:
-        "right",
-
-      writingDirection:
-        "rtl",
-    },
-
 
     rowRtl: {
       flexDirection:
         "row-reverse",
     },
 
-
-    errorBox: {
-      flexDirection:
-        "row",
-
-      alignItems:
-        "center",
-
-      gap: 8,
-
-      padding: 13,
-
-      marginBottom: 15,
-
-      borderRadius: 15,
-
-      backgroundColor:
-        "#FEF3F2",
+    textRtl: {
+      textAlign:
+        "right",
+      writingDirection:
+        "rtl",
     },
 
-
-    errorText: {
-      flex: 1,
-
-      fontFamily:
-        "Cairo_500Medium",
-
-      fontSize: 12,
-
-      color:
-        COLORS.coral,
-    },
-
-
-    list: {
-      gap: 13,
-    },
-
-
-    notificationCard: {
-      backgroundColor:
-        COLORS.white,
-
-      borderWidth: 1,
-
-      borderColor:
-        COLORS.border,
-
-      borderRadius: 21,
-
-      padding: 15,
-    },
-
-
-    notificationCardUnread: {
-      backgroundColor:
-        COLORS.unreadBg,
-
-      borderColor:
-        COLORS.unreadBorder,
-    },
-
-
-    notificationCardPressed: {
-      opacity: 0.8,
-    },
-
-
-    notificationCardRemoving: {
-      opacity: 0.55,
-    },
-
-
-    notificationRow: {
-      flexDirection:
-        "row",
-
-      alignItems:
+    backButton: {
+      alignSelf:
         "flex-start",
-
-      gap: 12,
-    },
-
-
-    notificationIcon: {
-      width: 45,
-
-      height: 45,
-
-      borderRadius: 15,
-
-      backgroundColor:
-        "#F3F1EE",
-
-      alignItems:
-        "center",
-
-      justifyContent:
-        "center",
-
-      flexShrink: 0,
-    },
-
-
-    notificationIconUnread: {
-      backgroundColor:
-        COLORS.white,
-    },
-
-
-    notificationContent: {
-      flex: 1,
-    },
-
-
-    notificationTitleRow: {
       flexDirection:
         "row",
-
       alignItems:
         "center",
-
-      gap: 7,
+      gap: 10,
+      marginBottom: 43,
     },
 
-
-    notificationTitle: {
-      flex: 1,
-
+    backText: {
       fontFamily:
-        "Cairo_600SemiBold",
-
+        "Cairo_700Bold",
       fontSize: 14,
-
-      lineHeight: 22,
-
       color:
         COLORS.text,
     },
 
-
-    notificationTitleUnread: {
+    title: {
       fontFamily:
-        "Cairo_700Bold",
+        "Cairo_800ExtraBold",
+      fontSize: 35,
+      lineHeight: 45,
+      color:
+        COLORS.text,
     },
 
-
-    unreadDot: {
-      width: 8,
-
-      height: 8,
-
-      borderRadius: 4,
-
-      backgroundColor:
-        COLORS.coral,
-
-      flexShrink: 0,
+    markAllRow: {
+      flexDirection:
+        "row",
+      justifyContent:
+        "flex-end",
+      marginTop: 29,
+      marginBottom: 35,
     },
 
-
-    deleteButton: {
-      width: 30,
-
-      height: 30,
-
-      borderRadius: 10,
-
-      backgroundColor:
-        "#F3F1EE",
-
+    markAllButton: {
+      flexDirection:
+        "row",
       alignItems:
         "center",
+      gap: 10,
+    },
 
-      justifyContent:
+    markAllText: {
+      fontFamily:
+        "Cairo_700Bold",
+      fontSize: 14,
+      color:
+        COLORS.text,
+    },
+
+    topDivider: {
+      height: 1,
+      backgroundColor:
+        COLORS.border,
+    },
+
+    errorBox: {
+      flexDirection:
+        "row",
+      alignItems:
         "center",
+      gap: 8,
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor:
+        COLORS.border,
+    },
 
+    errorText: {
+      flex: 1,
+      fontFamily:
+        "Cairo_500Medium",
+      fontSize: 12,
+      color:
+        COLORS.coral,
+    },
+
+    list: {
+      width: "100%",
+    },
+
+    notificationItem: {
+      paddingVertical: 38,
+      borderBottomWidth: 1,
+      borderBottomColor:
+        COLORS.border,
+    },
+
+    lastNotificationItem: {
+      borderBottomWidth: 0,
+    },
+
+    notificationPressed: {
+      opacity: 0.7,
+    },
+
+    notificationRemoving: {
+      opacity: 0.45,
+    },
+
+    notificationRow: {
+      flexDirection:
+        "row",
+      alignItems:
+        "flex-start",
+    },
+
+    notificationIcon: {
+      width: 33,
+      paddingTop: 4,
+      alignItems:
+        "flex-start",
       flexShrink: 0,
     },
 
-
-    deleteButtonPressed: {
-      opacity: 0.6,
+    notificationContent: {
+      flex: 1,
+      paddingRight: 10,
     },
 
+    notificationTitle: {
+      fontFamily:
+        "Cairo_700Bold",
+      fontSize: 17,
+      lineHeight: 25,
+      color:
+        COLORS.text,
+    },
 
     notificationBody: {
-      marginTop: 3,
-
+      marginTop: 22,
       fontFamily:
         "Cairo_400Regular",
-
-      fontSize: 12,
-
-      lineHeight: 20,
-
+      fontSize: 15,
+      lineHeight: 28,
       color:
         COLORS.muted,
     },
 
-
-    notificationFooter: {
-      marginTop: 11,
-
+    notificationMeta: {
+      marginTop: 20,
       flexDirection:
         "row",
-
       alignItems:
         "center",
-
-      justifyContent:
-        "space-between",
-
-      gap: 10,
+      gap: 4,
     },
-
 
     notificationDate: {
-      flexShrink: 1,
-
       fontFamily:
         "Cairo_400Regular",
-
-      fontSize: 10,
-
+      fontSize: 12,
       color:
-        "#98938C",
+        COLORS.muted,
     },
 
-
-    statusBadge: {
-      paddingHorizontal: 9,
-
-      paddingVertical: 3,
-
-      borderRadius: 10,
-    },
-
-
-    statusBadgeUnread: {
-      backgroundColor:
-        "#FFF1F2",
-    },
-
-
-    statusBadgeRead: {
-      backgroundColor:
-        "#EDF8F7",
-    },
-
-
-    statusBadgeText: {
+    metaDot: {
       fontFamily:
-        "Cairo_600SemiBold",
-
-      fontSize: 9,
-    },
-
-
-    statusBadgeTextUnread: {
+        "Cairo_400Regular",
+      fontSize: 12,
       color:
-        COLORS.coral,
+        COLORS.muted,
     },
 
-
-    statusBadgeTextRead: {
-      color:
-        COLORS.primary,
+    deleteButton: {
+      width: 31,
+      height: 31,
+      alignItems:
+        "flex-end",
+      justifyContent:
+        "flex-start",
+      paddingTop: 2,
+      flexShrink: 0,
     },
 
+    deleteButtonPressed: {
+      opacity: 0.5,
+    },
 
     emptyBox: {
-      minHeight: 230,
-
-      backgroundColor:
-        COLORS.white,
-
-      borderRadius: 22,
-
-      borderWidth: 1,
-
-      borderColor:
-        COLORS.border,
-
+      minHeight: 260,
       alignItems:
         "center",
-
       justifyContent:
         "center",
-
-      padding: 25,
-
       gap: 14,
+      padding: 25,
     },
-
-
-    emptyIcon: {
-      width: 64,
-
-      height: 64,
-
-      borderRadius: 22,
-
-      backgroundColor:
-        "#ECF8F7",
-
-      alignItems:
-        "center",
-
-      justifyContent:
-        "center",
-    },
-
 
     emptyText: {
       fontFamily:
         "Cairo_500Medium",
-
       fontSize: 13,
-
       lineHeight: 22,
-
       color:
         COLORS.muted,
-
       textAlign:
         "center",
     },
+
   });

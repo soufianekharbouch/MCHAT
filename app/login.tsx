@@ -1,9 +1,7 @@
 import React, { useState } from "react";
 
 import * as SecureStore from "expo-secure-store";
-
 import { router } from "expo-router";
-
 import * as Application from "expo-application";
 
 import {
@@ -17,6 +15,7 @@ import {
   Image,
   StatusBar,
   ScrollView,
+  ActivityIndicator,
 } from "react-native";
 
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -37,6 +36,7 @@ import ar from "../translations/ar";
 import { useAppLanguage } from "../context/LanguageContext";
 import { associateDeviceWithCustomer } from "../services/pushNotifications";
 
+
 export default function LoginScreen() {
   const {
     language,
@@ -44,13 +44,9 @@ export default function LoginScreen() {
   } = useAppLanguage();
 
   const [loading, setLoading] = useState(false);
-
   const [error, setError] = useState("");
-
   const [phone, setPhone] = useState("");
-
   const [password, setPassword] = useState("");
-
   const [showPassword, setShowPassword] = useState(false);
 
   const [fontsLoaded] = useFonts({
@@ -67,15 +63,17 @@ export default function LoginScreen() {
 
   const isArabic = language === "ar";
 
+  // Kept because your existing screen uses the translation files.
+  // You can continue using them elsewhere without changing anything.
   const t = isArabic ? ar : en;
 
   const appVersion =
-    Application.nativeApplicationVersion
-      || "1.0.0";
+    Application.nativeApplicationVersion || "1.0.0";
+
 
   /*
   |--------------------------------------------------------------------------
-  | Login
+  | LOGIN
   |--------------------------------------------------------------------------
   */
 
@@ -90,7 +88,7 @@ export default function LoginScreen() {
       setError(
         isArabic
           ? "يرجى إدخال رقم الهاتف"
-          : "Please enter your phone number.",
+          : "Please enter your phone number."
       );
 
       return;
@@ -104,7 +102,7 @@ export default function LoginScreen() {
       setError(
         isArabic
           ? "يرجى إدخال كلمة المرور"
-          : "Please enter your password.",
+          : "Please enter your password."
       );
 
       return;
@@ -132,7 +130,7 @@ export default function LoginScreen() {
             password,
             locale: language,
           }),
-        },
+        }
       );
 
       let data;
@@ -143,11 +141,12 @@ export default function LoginScreen() {
         setError(
           isArabic
             ? "استجابة غير صالحة من الخادم"
-            : "Invalid response from server.",
+            : "Invalid response from server."
         );
 
         return;
       }
+
 
       /*
        * Login failed
@@ -158,11 +157,12 @@ export default function LoginScreen() {
           data.message ||
             (isArabic
               ? "تعذر تسجيل الدخول"
-              : "Unable to sign in."),
+              : "Unable to sign in.")
         );
 
         return;
       }
+
 
       /*
        * Make sure an access token
@@ -173,55 +173,54 @@ export default function LoginScreen() {
         setError(
           isArabic
             ? "لم يتم استلام رمز الدخول"
-            : "Access token was not returned.",
+            : "Access token was not returned."
         );
 
         return;
       }
 
+
       /*
       |--------------------------------------------------------------------------
-      | Save access token
+      | SAVE ACCESS TOKEN
       |--------------------------------------------------------------------------
       */
 
       await SecureStore.setItemAsync(
         "access_token",
-        data.access_token,
+        data.access_token
       );
+
 
       /*
       |--------------------------------------------------------------------------
-      | Save expiration date
+      | SAVE EXPIRATION DATE
       |--------------------------------------------------------------------------
       */
 
       if (data.expires_at) {
         await SecureStore.setItemAsync(
           "access_token_expires_at",
-          data.expires_at,
+          data.expires_at
         );
       } else {
-        /*
-         * Remove an old expiration date
-         * if backend doesn't return one.
-         */
-
         await SecureStore.deleteItemAsync(
-          "access_token_expires_at",
+          "access_token_expires_at"
         );
       }
 
+
       /*
       |--------------------------------------------------------------------------
-      | Save selected language
+      | SAVE SELECTED LANGUAGE
       |--------------------------------------------------------------------------
       */
 
       await SecureStore.setItemAsync(
         "locale",
-        language,
+        language
       );
+
 
       /*
       |--------------------------------------------------------------------------
@@ -245,32 +244,26 @@ export default function LoginScreen() {
               language,
               access_token: data.access_token,
             }),
-          },
+          }
         );
 
         if (!languageResponse.ok) {
           console.warn(
-            "Customer language could not be synchronized with server settings.",
+            "Customer language could not be synchronized with server settings."
           );
         }
       } catch (languageError) {
         console.error(
           "Customer language synchronization error:",
-          languageError,
+          languageError
         );
       }
+
 
       /*
       |--------------------------------------------------------------------------
       | INITIAL PASSWORD STATUS
       |--------------------------------------------------------------------------
-      |
-      | Backend must return:
-      |
-      | must_change_password: true
-      |
-      | while password_changed_at is NULL.
-      |
       */
 
       const mustChangePassword =
@@ -278,24 +271,14 @@ export default function LoginScreen() {
 
       await SecureStore.setItemAsync(
         "must_change_password",
-        mustChangePassword
-          ? "1"
-          : "0",
+        mustChangePassword ? "1" : "0"
       );
+
 
       /*
       |--------------------------------------------------------------------------
-      | Associate device with customer
+      | ASSOCIATE DEVICE WITH CUSTOMER
       |--------------------------------------------------------------------------
-      |
-      | The device may already have been registered anonymously
-      | from app/_layout.tsx.
-      |
-      | Now that access_token exists, registerDevice() can tell
-      | Laravel which customer owns this device.
-      |
-      | Push registration must NEVER prevent login.
-      |
       */
 
       try {
@@ -304,46 +287,51 @@ export default function LoginScreen() {
 
         if (!deviceResult.success) {
           console.warn(
-            "Device could not be associated with customer.",
+            "Device could not be associated with customer."
           );
         }
       } catch (deviceError) {
         console.error(
           "Device association error:",
-          deviceError,
+          deviceError
         );
       }
 
+
       /*
       |--------------------------------------------------------------------------
-      | Go to application
+      | GO TO APPLICATION
       |--------------------------------------------------------------------------
       */
 
       if (mustChangePassword) {
-        router.replace(
-          "/change-password",
-        );
+        router.replace("/change-password");
       } else {
-        router.replace(
-          "/(tabs)",
-        );
+        router.replace("/(tabs)");
       }
+
     } catch (exception) {
       console.error(
         "Login error:",
-        exception,
+        exception
       );
 
       setError(
         isArabic
           ? "حدث خطأ في الاتصال بالخادم. حاول مرة أخرى."
-          : "Unable to connect to the server. Please try again.",
+          : "Unable to connect to the server. Please try again."
       );
     } finally {
       setLoading(false);
     }
   };
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | SCREEN TEXT
+  |--------------------------------------------------------------------------
+  */
 
   const screenText = {
     signIn: isArabic
@@ -352,14 +340,13 @@ export default function LoginScreen() {
 
     subtitle: isArabic
       ? "تغذية طازجة ومخصصة تصل مباشرة إلى وعاء قطتك."
-      : "Tailored fresh culinary nutrition delivered to your cat’s bowl.",
+      : "Tailored fresh culinary nutrition delivered to your pet’s bowl.",
 
     phoneLabel: isArabic
       ? "رقم الهاتف المحمول"
       : "Mobile Phone Number",
 
-    phonePlaceholder:
-      "+965 50 123 4567",
+    phonePlaceholder: "+971 50 123 4567",
 
     passwordLabel: isArabic
       ? "كلمة المرور"
@@ -373,18 +360,30 @@ export default function LoginScreen() {
       ? "جاري تسجيل الدخول..."
       : "Signing in...",
 
-    notice: isArabic
-      ? "التسجيل الذاتي قيد انتظار الموافقة النهائية. إنشاء الحسابات يتم حالياً يدوياً عند إتمام الطلب الأولي على Shopify."
-      : "Self-service registration is pending final business approval. Account creation is currently managed upon initial Shopify checkout.",
-
     languageButton: isArabic
       ? "EN"
       : "العربية",
   };
 
+
+  /*
+  |--------------------------------------------------------------------------
+  | FORGOT PASSWORD
+  |--------------------------------------------------------------------------
+  */
+
   const handleForgotPassword = () => {
-    // OTP Forgot Password screen will be connected later.
+    // Connect your forgot-password page here later.
+    // Example:
+    // router.push("/forgot-password");
   };
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | RENDER
+  |--------------------------------------------------------------------------
+  */
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -402,20 +401,25 @@ export default function LoginScreen() {
         }
       >
         <View style={styles.page}>
+
+          {/* LANGUAGE */}
+
           <Pressable
             style={styles.languageButton}
             onPress={() =>
               setLanguage(
                 isArabic
                   ? "en"
-                  : "ar",
+                  : "ar"
               )
             }
+            hitSlop={10}
           >
             <Text style={styles.languageButtonText}>
               {screenText.languageButton}
             </Text>
           </Pressable>
+
 
           <ScrollView
             style={styles.scroll}
@@ -423,53 +427,123 @@ export default function LoginScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            <View style={styles.card}>
+
+            {/* LOGO */}
+
+            <View style={styles.logoSection}>
               <Image
                 source={require("../assets/images/maison-chat-logo.png")}
                 style={styles.logo}
                 resizeMode="contain"
               />
+            </View>
 
-              <View style={styles.intro}>
+
+            {/* INTRO */}
+
+            <View style={styles.intro}>
+
+              <Text
+                style={[
+                  styles.title,
+                  isArabic
+                    ? styles.textArabic
+                    : styles.textEnglish,
+                ]}
+              >
+                {screenText.signIn}
+              </Text>
+
+
+              <Text
+                style={[
+                  styles.subtitle,
+                  isArabic
+                    ? styles.textArabic
+                    : styles.textEnglish,
+                ]}
+              >
+                {screenText.subtitle}
+              </Text>
+
+            </View>
+
+
+            {/* ERROR */}
+
+            {error !== "" && (
+              <View style={styles.errorBox}>
                 <Text
                   style={[
-                    styles.title,
+                    styles.errorText,
                     isArabic
                       ? styles.textArabic
                       : styles.textEnglish,
                   ]}
                 >
-                  {screenText.signIn}
-                </Text>
-
-                <Text
-                  style={[
-                    styles.subtitle,
-                    isArabic
-                      ? styles.textArabic
-                      : styles.textEnglish,
-                  ]}
-                >
-                  {screenText.subtitle}
+                  {error}
                 </Text>
               </View>
+            )}
 
-              {error !== "" && (
-                <View style={styles.errorBox}>
-                  <Text
-                    style={[
-                      styles.errorText,
-                      isArabic
-                        ? styles.textArabic
-                        : styles.textEnglish,
-                    ]}
-                  >
-                    {error}
-                  </Text>
-                </View>
-              )}
 
-              <View style={styles.field}>
+            {/* PHONE */}
+
+            <View style={styles.field}>
+
+              <Text
+                style={[
+                  styles.label,
+                  isArabic
+                    ? styles.textArabic
+                    : styles.textEnglish,
+                ]}
+              >
+                {screenText.phoneLabel}
+              </Text>
+
+
+              <View style={styles.inputContainer}>
+
+                <TextInput
+                  style={[
+                    styles.input,
+                    isArabic
+                      ? styles.inputArabic
+                      : styles.inputEnglish,
+                  ]}
+                  value={phone}
+                  onChangeText={setPhone}
+                  placeholder={
+                    screenText.phonePlaceholder
+                  }
+                  placeholderTextColor={
+                    COLORS.placeholder
+                  }
+                  keyboardType="phone-pad"
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  textContentType="telephoneNumber"
+                  editable={!loading}
+                />
+
+              </View>
+
+            </View>
+
+
+            {/* PASSWORD */}
+
+            <View style={styles.field}>
+
+              <View
+                style={[
+                  styles.passwordLabelRow,
+                  isArabic &&
+                    styles.passwordLabelRowArabic,
+                ]}
+              >
+
                 <Text
                   style={[
                     styles.label,
@@ -478,467 +552,519 @@ export default function LoginScreen() {
                       : styles.textEnglish,
                   ]}
                 >
-                  {screenText.phoneLabel}
+                  {screenText.passwordLabel}
                 </Text>
 
-                <View
-                  style={[
-                    styles.inputContainer,
-                    isArabic &&
-                      styles.inputContainerArabic,
-                  ]}
-                >
-                  <MaterialCommunityIcons
-                    name="phone-outline"
-                    size={21}
-                    color={COLORS.icon}
-                  />
 
-                  <TextInput
-                    style={[
-                      styles.input,
-                      isArabic
-                        ? styles.inputArabic
-                        : styles.inputEnglish,
-                    ]}
-                    value={phone}
-                    onChangeText={setPhone}
-                    placeholder={
-                      screenText.phonePlaceholder
-                    }
-                    placeholderTextColor={
-                      COLORS.placeholder
-                    }
-                    keyboardType="phone-pad"
-                    autoCorrect={false}
-                    textContentType="telephoneNumber"
-                  />
-                </View>
-              </View>
-
-              <View style={styles.field}>
-                <View
-                  style={[
-                    styles.passwordLabelRow,
-                    isArabic &&
-                      styles.passwordLabelRowArabic,
-                  ]}
+                <Pressable
+                  onPress={handleForgotPassword}
+                  hitSlop={10}
                 >
-                  <Text
-                    style={[
-                      styles.label,
-                      styles.passwordLabel,
-                      isArabic
-                        ? styles.textArabic
-                        : styles.textEnglish,
-                    ]}
-                  >
-                    {screenText.passwordLabel}
+                  <Text style={styles.forgotPassword}>
+                    {screenText.forgotPassword}
                   </Text>
+                </Pressable>
 
-                  <Pressable
-                    onPress={handleForgotPassword}
-                    hitSlop={8}
-                  >
-                    <Text
-                      style={
-                        styles.forgotPassword
-                      }
-                    >
-                      {screenText.forgotPassword}
-                    </Text>
-                  </Pressable>
-                </View>
-
-                <View
-                  style={[
-                    styles.inputContainer,
-                    isArabic &&
-                      styles.inputContainerArabic,
-                  ]}
-                >
-                  <MaterialCommunityIcons
-                    name="lock-outline"
-                    size={21}
-                    color={COLORS.icon}
-                  />
-
-                  <TextInput
-                    style={[
-                      styles.input,
-                      isArabic
-                        ? styles.inputArabic
-                        : styles.inputEnglish,
-                    ]}
-                    value={password}
-                    onChangeText={setPassword}
-                    placeholder="••••••••"
-                    placeholderTextColor={
-                      COLORS.placeholder
-                    }
-                    secureTextEntry={
-                      !showPassword
-                    }
-                    textContentType="password"
-                  />
-
-                  <Pressable
-                    style={styles.eyeButton}
-                    onPress={() =>
-                      setShowPassword(
-                        !showPassword,
-                      )
-                    }
-                    hitSlop={8}
-                  >
-                    <MaterialCommunityIcons
-                      name={
-                        showPassword
-                          ? "eye-off-outline"
-                          : "eye-outline"
-                      }
-                      size={21}
-                      color={COLORS.icon}
-                    />
-                  </Pressable>
-                </View>
               </View>
 
-              <Pressable
-                style={({ pressed }) => [
-                  styles.loginButton,
 
-                  pressed &&
-                    !loading &&
-                    styles.loginButtonPressed,
-
-                  loading &&
-                    styles.loginButtonDisabled,
-                ]}
-                onPress={handleLogin}
-                disabled={loading}
-              >
-                <Text
-                  style={
-                    styles.loginButtonText
-                  }
-                >
-                  {loading
-                    ? screenText.signingIn
-                    : screenText.signIn}
-                </Text>
-              </Pressable>
-
-              <Text
+              <View
                 style={[
-                  styles.notice,
-                  isArabic &&
-                    styles.noticeArabic,
+                  styles.inputContainer,
+                  styles.passwordInputContainer,
                 ]}
               >
-                {screenText.notice}
-              </Text>
 
-              <Text style={styles.appVersion}>
-                v{appVersion}
-              </Text>
+                <TextInput
+                  style={[
+                    styles.input,
+                    styles.passwordInput,
+                    isArabic
+                      ? styles.inputArabic
+                      : styles.inputEnglish,
+                  ]}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="••••••••"
+                  placeholderTextColor={
+                    COLORS.placeholder
+                  }
+                  secureTextEntry={!showPassword}
+                  textContentType="password"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!loading}
+                />
+
+
+                <Pressable
+                  style={styles.eyeButton}
+                  onPress={() =>
+                    setShowPassword(
+                      current => !current
+                    )
+                  }
+                  hitSlop={10}
+                >
+                  <MaterialCommunityIcons
+                    name={
+                      showPassword
+                        ? "eye-off-outline"
+                        : "eye-outline"
+                    }
+                    size={26}
+                    color={COLORS.eye}
+                  />
+                </Pressable>
+
+              </View>
+
             </View>
+
+
+            {/* SIGN IN */}
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.loginButton,
+
+                pressed &&
+                  !loading &&
+                  styles.loginButtonPressed,
+
+                loading &&
+                  styles.loginButtonDisabled,
+              ]}
+              onPress={handleLogin}
+              disabled={loading}
+            >
+
+              {loading ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator
+                    size="small"
+                    color={COLORS.white}
+                  />
+
+                  <Text style={styles.loginButtonText}>
+                    {screenText.signingIn}
+                  </Text>
+                </View>
+              ) : (
+                <Text style={styles.loginButtonText}>
+                  {screenText.signIn}
+                </Text>
+              )}
+
+            </Pressable>
+
+
+            {/* BOTTOM LINE */}
+
+            <View style={styles.bottomDivider} />
+
+
+            {/* VERSION */}
+
+            <Text style={styles.appVersion}>
+              v{appVersion}
+            </Text>
+
           </ScrollView>
+
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
+
+/*
+|--------------------------------------------------------------------------
+| COLORS
+|--------------------------------------------------------------------------
+*/
+
 const COLORS = {
   background: "#F4F1EC",
-  card: "#FFFFFF",
-  primary: "#249B97",
-  text: "#252525",
-  muted: "#716D68",
+
+  text: "#292929",
+
+  muted: "#85817D",
+
   white: "#FFFFFF",
-  border: "#D9CEC2",
-  placeholder: "#77736D",
-  icon: "#A9A9A9",
+
+  border: "#D8CFC5",
+
+  placeholder: "#55514D",
+
+  eye: "#7A7A78",
+
+  button: "#292929",
+
   errorBackground: "#FFF0F0",
+
   errorBorder: "#FFD8D8",
+
   errorText: "#C0392B",
 };
 
+
+/*
+|--------------------------------------------------------------------------
+| STYLES
+|--------------------------------------------------------------------------
+*/
+
 const styles = StyleSheet.create({
+
+  /*
+  |--------------------------------------------------------------------------
+  | SCREEN
+  |--------------------------------------------------------------------------
+  */
+
   safeArea: {
     flex: 1,
     backgroundColor: COLORS.background,
   },
 
+
   keyboardContainer: {
     flex: 1,
   },
+
 
   page: {
     flex: 1,
     backgroundColor: COLORS.background,
   },
 
+
   scroll: {
     flex: 1,
   },
 
-  /*
-   * IMPORTANT:
-   * No flexGrow here.
-   *
-   * The ScrollView content height will now be based
-   * on the actual content.
-   */
+
   scrollContent: {
-    paddingTop: 20,
-    paddingBottom: 24,
+    flexGrow: 1,
+
+    paddingHorizontal: 28,
+
+    paddingTop: 15,
+    paddingBottom: 18,
   },
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | LANGUAGE
+  |--------------------------------------------------------------------------
+  */
 
   languageButton: {
     position: "absolute",
-    top: 6,
-    right: 8,
+
+    top: 7,
+    right: 28,
+
     zIndex: 20,
 
-    minWidth: 72,
-    height: 34,
-
-    paddingHorizontal: 14,
-
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-
-    backgroundColor: COLORS.white,
-
-    alignItems: "center",
-    justifyContent: "center",
+    paddingHorizontal: 3,
+    paddingVertical: 3,
   },
+
 
   languageButtonText: {
     fontFamily: "Cairo_500Medium",
-    fontSize: 13,
+
+    fontSize: 12,
+
+    lineHeight: 19,
+
     color: COLORS.text,
-    lineHeight: 20,
   },
+
 
   /*
-   * CARD
-   *
-   * flexGrow: 1 has been REMOVED.
-   * height: "auto" has also been REMOVED.
-   *
-   * React Native automatically calculates the
-   * height according to its content.
-   */
-  card: {
-    width: "90%",
+  |--------------------------------------------------------------------------
+  | LOGO
+  |--------------------------------------------------------------------------
+  */
 
-    alignSelf: "center",
+  logoSection: {
+    width: "100%",
 
-    marginTop: 60,
+    alignItems: "center",
 
-    paddingTop: 15,
-    paddingHorizontal: 12,
-    paddingBottom: 8,
+    justifyContent: "center",
 
-    backgroundColor: COLORS.card,
+    marginTop:15,
 
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 22,
-    borderBottomLeftRadius: 22,
-    borderBottomRightRadius: 22,
-
-    borderWidth: 1,
-    borderColor: "#E8E1DA",
-    borderStyle: "solid",
-
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-
-    elevation: 4,
+    marginBottom: 15,
   },
+
 
   logo: {
-    width: 80,
-    height: 80,
-    alignSelf: "center",
-    marginBottom: 10,
+    width: 140,
+    height: 100,
   },
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | INTRO
+  |--------------------------------------------------------------------------
+  */
 
   intro: {
     width: "100%",
-    marginBottom: 24,
+
+    marginBottom: 30,
   },
+
 
   title: {
     width: "100%",
+
     fontFamily: "Cairo_800ExtraBold",
-    fontSize: 25,
-    lineHeight: 36,
+
+    fontSize: 39,
+
+    lineHeight: 52,
+
     color: COLORS.text,
-    marginBottom: 3,
+
+    marginBottom: 10,
   },
+
 
   subtitle: {
     width: "100%",
+
+    maxWidth: 390,
+
     fontFamily: "Cairo_400Regular",
-    fontSize: 15,
-    lineHeight: 21,
+
+    fontSize: 17,
+
+    lineHeight: 29,
+
     color: COLORS.muted,
   },
 
+
   textArabic: {
     textAlign: "right",
+
     writingDirection: "rtl",
   },
 
+
   textEnglish: {
     textAlign: "left",
+
     writingDirection: "ltr",
   },
 
+
+  /*
+  |--------------------------------------------------------------------------
+  | ERROR
+  |--------------------------------------------------------------------------
+  */
+
   errorBox: {
     width: "100%",
+
     backgroundColor: COLORS.errorBackground,
-    borderRadius: 12,
 
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-
-    marginBottom: 16,
+    borderRadius: 10,
 
     borderWidth: 1,
+
     borderColor: COLORS.errorBorder,
+
+    paddingHorizontal: 14,
+
+    paddingVertical: 10,
+
+    marginBottom: 20,
   },
+
 
   errorText: {
     fontFamily: "Cairo_500Medium",
+
     color: COLORS.errorText,
+
     fontSize: 13,
+
     lineHeight: 21,
   },
 
+
+  /*
+  |--------------------------------------------------------------------------
+  | FIELDS
+  |--------------------------------------------------------------------------
+  */
+
   field: {
     width: "100%",
-    marginBottom: 18,
+
+    marginBottom: 29,
   },
+
 
   label: {
-    fontFamily: "Cairo_700Bold",
-    fontSize: 14,
-    lineHeight: 22,
+    fontFamily: "Cairo_600SemiBold",
+
+    fontSize: 16,
+
+    lineHeight: 24,
+
     color: COLORS.text,
+
+    marginBottom: 10,
   },
 
-  passwordLabel: {
-    flexShrink: 1,
-  },
-
-  passwordLabelRow: {
-    width: "100%",
-    minHeight: 25,
-
-    marginBottom: 7,
-
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-
-  passwordLabelRowArabic: {
-    flexDirection: "row-reverse",
-  },
-
-  forgotPassword: {
-    fontFamily: "Cairo_500Medium",
-    fontSize: 14,
-    lineHeight: 22,
-    color: COLORS.primary,
-  },
 
   inputContainer: {
     width: "100%",
-    height: 48,
 
-    paddingHorizontal: 14,
+    height: 64,
 
     borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 18,
 
-    backgroundColor: COLORS.white,
+    borderColor: COLORS.border,
+
+    borderRadius: 8,
+
+    backgroundColor: COLORS.background,
 
     flexDirection: "row",
+
     alignItems: "center",
 
-    gap: 10,
+    paddingHorizontal: 18,
   },
 
-  inputContainerArabic: {
-    flexDirection: "row-reverse",
-  },
 
   input: {
     flex: 1,
+
     height: "100%",
 
     paddingVertical: 0,
 
     fontFamily: "Cairo_400Regular",
-    fontSize: 14,
+
+    fontSize: 16,
+
     color: COLORS.text,
   },
 
-  inputArabic: {
-    textAlign: "right",
-    writingDirection: "rtl",
-  },
 
   inputEnglish: {
     textAlign: "left",
+
     writingDirection: "ltr",
   },
 
+
+  inputArabic: {
+    textAlign: "right",
+
+    writingDirection: "rtl",
+  },
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | PASSWORD
+  |--------------------------------------------------------------------------
+  */
+
+  passwordLabelRow: {
+    width: "100%",
+
+    flexDirection: "row",
+
+    justifyContent: "space-between",
+
+    alignItems: "center",
+
+    marginBottom: 10,
+  },
+
+
+  passwordLabelRowArabic: {
+    flexDirection: "row-reverse",
+  },
+
+
+  passwordLabelRowText: {
+    marginBottom: 0,
+  },
+
+
+  forgotPassword: {
+    fontFamily: "Cairo_600SemiBold",
+
+    fontSize: 14,
+
+    lineHeight: 22,
+
+    color: COLORS.text,
+  },
+
+
+  passwordInputContainer: {
+    paddingRight: 12,
+  },
+
+
+  passwordInput: {
+    paddingRight: 10,
+  },
+
+
   eyeButton: {
-    width: 30,
+    width: 42,
+
     height: "100%",
 
     alignItems: "center",
+
     justifyContent: "center",
   },
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | BUTTON
+  |--------------------------------------------------------------------------
+  */
 
   loginButton: {
     width: "100%",
-    height: 51,
 
-    marginTop: 12,
-    marginBottom: 24,
+    height: 61,
 
-    borderRadius: 19,
+    borderRadius: 9,
 
-    backgroundColor: COLORS.primary,
+    backgroundColor: COLORS.button,
 
     alignItems: "center",
+
     justifyContent: "center",
 
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.12,
-    shadowRadius: 7,
+    marginTop: 1,
 
-    elevation: 3,
+    marginBottom: 30,
   },
+
 
   loginButtonPressed: {
     opacity: 0.88,
@@ -950,47 +1076,61 @@ const styles = StyleSheet.create({
     ],
   },
 
+
   loginButtonDisabled: {
     opacity: 0.65,
   },
 
+
   loginButtonText: {
     fontFamily: "Cairo_700Bold",
+
     color: COLORS.white,
+
     fontSize: 15,
-    lineHeight: 22,
+
+    lineHeight: 23,
   },
 
-  notice: {
+
+  loadingContainer: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    gap: 10,
+  },
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | BOTTOM
+  |--------------------------------------------------------------------------
+  */
+
+  bottomDivider: {
     width: "100%",
 
-    paddingHorizontal: 10,
+    height: 1,
+
+    backgroundColor: COLORS.border,
+
+    marginBottom: 8,
+  },
+
+
+  appVersion: {
+    alignSelf: "center",
 
     fontFamily: "Cairo_400Regular",
 
-    fontSize: 11.5,
-    lineHeight: 16,
+    fontSize: 9,
 
-    color: "#817B75",
+    color: COLORS.muted,
 
-    textAlign: "center",
+    opacity: 0.45,
   },
 
-  noticeArabic: {
-    writingDirection: "rtl",
-  },
-
-  appVersion: {
-    marginTop: 10,
-
-    alignSelf: "center",
-
-    fontFamily: "Cairo_500Medium",
-
-    fontSize: 10,
-
-    color: "#AAA39C",
-
-    letterSpacing: 0.3,
-  },
 });

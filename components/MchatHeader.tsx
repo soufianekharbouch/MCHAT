@@ -1,10 +1,4 @@
-import React, {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -18,49 +12,31 @@ import {
   Text,
   View,
 } from "react-native";
-
-import {
-  SafeAreaView,
-  useSafeAreaInsets,
-} from "react-native-safe-area-context";
-
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as SecureStore from "expo-secure-store";
-
-import {
-  router,
-  usePathname,
-} from "expo-router";
-
+import { router, usePathname } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { detachCustomerFromDevice } from "../services/pushNotifications";
+import { getUnreadNotificationCount } from "../services/notificationApi";
+import { useAppLanguage } from "../context/LanguageContext";
 
-import {
-  detachCustomerFromDevice,
-} from "../services/pushNotifications";
-
-import {
-  getUnreadNotificationCount,
-} from "../services/notificationApi";
-
-import {
-  useAppLanguage,
-} from "../context/LanguageContext";
+const API_BASE_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
 
 const COLORS = {
-  background: "#F7F5F1",
-  drawer: "#FFFEFA",
-  primary: "#2E7464",
-  primaryLight: "#E3F1EB",
-  text: "#55534F",
+  header: "#F4F1ECF5",
+  drawer: "#F8F5EF",
+  primary: "#249B97",
+  primaryLight: "#E2ECE7",
+  text: "#77736D",
   textStrong: "#292825",
   muted: "#89857E",
-  border: "#E8E3DC",
-  white: "#FFFFFF",
-  coral: "#D96767",
-  overlay: "rgba(45, 49, 45, 0.53)",
+  border: "#D8D1C7",
+  coral: "#EB6268",
+  overlay: "rgba(45,49,45,0.53)",
 };
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
-const DRAWER_WIDTH = Math.min(SCREEN_WIDTH * 0.80, 300);
+const DRAWER_WIDTH = Math.min(SCREEN_WIDTH * 0.86, 374);
 
 type DrawerRoute = {
   key: string;
@@ -68,22 +44,28 @@ type DrawerRoute = {
   labelEn: string;
   labelAr: string;
   route?: string;
-  badge?: number;
+};
+
+type CustomerProfile = {
+  firstName: string;
+  lastName: string;
 };
 
 export default function MchatHeader() {
   const { isArabic, setLanguage } = useAppLanguage();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
-
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [profile, setProfile] = useState<CustomerProfile>({
+    firstName: "",
+    lastName: "",
+  });
 
   const drawerTranslate = useRef(
     new Animated.Value(isArabic ? DRAWER_WIDTH : -DRAWER_WIDTH)
   ).current;
-
   const overlayOpacity = useRef(new Animated.Value(0)).current;
 
   const loadUnreadNotifications = useCallback(async () => {
@@ -95,34 +77,65 @@ export default function MchatHeader() {
     }
   }, []);
 
+  const loadCustomerProfile = useCallback(async () => {
+    try {
+      const token = await SecureStore.getItemAsync("access_token");
+      if (!token) {
+        setProfile({ firstName: "", lastName: "" });
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/settings`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ access_token: token }),
+      });
+
+      if (!response.ok) {
+        console.warn("Unable to load drawer customer:", response.status);
+        return;
+      }
+
+      const data = await response.json();
+      setProfile({
+        firstName: String(data?.customer?.first_name ?? "").trim(),
+        lastName: String(data?.customer?.last_name ?? "").trim(),
+      });
+    } catch (error) {
+      console.warn("Drawer customer error:", error);
+    }
+  }, []);
+
   useEffect(() => {
     loadUnreadNotifications();
-  }, [loadUnreadNotifications, pathname]);
+    loadCustomerProfile();
+  }, [loadUnreadNotifications, loadCustomerProfile, pathname]);
 
   useEffect(() => {
-    const subscription = AppState.addEventListener("change", (state) => {
+    const subscription = AppState.addEventListener("change", state => {
       if (state === "active") {
         loadUnreadNotifications();
+        loadCustomerProfile();
       }
     });
-
     return () => subscription.remove();
-  }, [loadUnreadNotifications]);
+  }, [loadUnreadNotifications, loadCustomerProfile]);
 
   useEffect(() => {
     if (!drawerVisible) {
-      drawerTranslate.setValue(
-        isArabic ? DRAWER_WIDTH : -DRAWER_WIDTH
-      );
+      drawerTranslate.setValue(isArabic ? DRAWER_WIDTH : -DRAWER_WIDTH);
     }
   }, [isArabic, drawerTranslate, drawerVisible]);
 
   const openDrawer = () => {
-    drawerTranslate.setValue(
-      isArabic ? DRAWER_WIDTH : -DRAWER_WIDTH
-    );
+    drawerTranslate.setValue(isArabic ? DRAWER_WIDTH : -DRAWER_WIDTH);
     overlayOpacity.setValue(0);
     setDrawerVisible(true);
+    void loadCustomerProfile();
 
     requestAnimationFrame(() => {
       Animated.parallel([
@@ -164,7 +177,6 @@ export default function MchatHeader() {
 
   const logout = async () => {
     if (loggingOut) return;
-
     setLoggingOut(true);
 
     try {
@@ -172,19 +184,15 @@ export default function MchatHeader() {
 
       if (token) {
         try {
-          await fetch(
-            "https://animal-care2.kharbouch-soufiane.com/api/mobile/logout",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json",
-              },
-              body: JSON.stringify({
-                access_token: token,
-              }),
-            }
-          );
+          await fetch(`${API_BASE_URL}/logout`, {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ access_token: token }),
+          });
         } catch (networkError) {
           console.warn("Server logout failed:", networkError);
         }
@@ -198,14 +206,12 @@ export default function MchatHeader() {
 
       await SecureStore.deleteItemAsync("access_token");
       await SecureStore.deleteItemAsync("access_token_expires_at");
-
       setUnreadNotifications(0);
+      setProfile({ firstName: "", lastName: "" });
       setDrawerVisible(false);
-
       router.replace("/login");
     } catch (error) {
       console.error("Logout error:", error);
-
       Alert.alert(
         isArabic ? "خطأ" : "Error",
         isArabic
@@ -219,17 +225,17 @@ export default function MchatHeader() {
 
   const confirmLogout = () => {
     Alert.alert(
-      isArabic ? "تسجيل الخروج" : "Sign out",
+      isArabic ? "تسجيل الخروج" : "Log Out",
       isArabic
         ? "هل أنت متأكد أنك تريد تسجيل الخروج؟"
-        : "Are you sure you want to sign out?",
+        : "Are you sure you want to log out?",
       [
         {
           text: isArabic ? "إلغاء" : "Cancel",
           style: "cancel",
         },
         {
-          text: isArabic ? "تسجيل الخروج" : "Sign out",
+          text: isArabic ? "تسجيل الخروج" : "Log Out",
           style: "destructive",
           onPress: logout,
         },
@@ -248,22 +254,21 @@ export default function MchatHeader() {
     {
       key: "pets",
       icon: "paw-outline",
-      labelEn: "My pets",
+      labelEn: "My Pets",
       labelAr: "حيواناتي",
       route: "/(tabs)/pets",
     },
     {
       key: "deliveries",
       icon: "car-outline",
-      labelEn: "Deliveries",
-      labelAr: "التوصيلات",
+      labelEn: "Manage Delivery",
+      labelAr: "إدارة التوصيل",
       route: "/(tabs)/orders",
-      badge: 2,
     },
     {
       key: "transition",
       icon: "book-outline",
-      labelEn: "Transition guide",
+      labelEn: "Transition Guide",
       labelAr: "دليل الانتقال",
     },
   ];
@@ -272,13 +277,13 @@ export default function MchatHeader() {
     {
       key: "help",
       icon: "chatbubble-outline",
-      labelEn: "Help & support",
+      labelEn: "Help & Support",
       labelAr: "المساعدة والدعم",
     },
     {
       key: "account",
       icon: "person-outline",
-      labelEn: "My account",
+      labelEn: "My Account",
       labelAr: "حسابي",
       route: "/(tabs)/settings",
     },
@@ -286,13 +291,20 @@ export default function MchatHeader() {
 
   const isItemActive = (item: DrawerRoute) => {
     if (item.key === "home") {
-      return pathname === "/" || pathname === "/(tabs)" || pathname === "/index";
+      return (
+        pathname === "/" ||
+        pathname === "/(tabs)" ||
+        pathname === "/index"
+      );
     }
-
     if (item.key === "pets") return pathname.includes("pets");
     if (item.key === "deliveries") return pathname.includes("orders");
-    if (item.key === "account") return pathname.includes("settings");
-
+    if (item.key === "account") {
+      return (
+        pathname.includes("settings") ||
+        pathname.includes("saved-addresses")
+      );
+    }
     return false;
   };
 
@@ -314,10 +326,9 @@ export default function MchatHeader() {
       >
         <Ionicons
           name={item.icon}
-          size={23}
-          color={active ? COLORS.primary : "#67645F"}
+          size={24}
+          color={active ? COLORS.primary : "#77736D"}
         />
-
         <Text
           style={[
             styles.drawerItemText,
@@ -327,36 +338,26 @@ export default function MchatHeader() {
         >
           {isArabic ? item.labelAr : item.labelEn}
         </Text>
-
-        {!!item.badge && (
-          <View style={styles.menuBadge}>
-            <Text style={styles.menuBadgeText}>
-              {item.badge}
-            </Text>
-          </View>
-        )}
       </Pressable>
     );
   };
+
+  const fullName =
+    [profile.firstName, profile.lastName].filter(Boolean).join(" ") ||
+    (isArabic ? "العميل" : "Customer");
+  const initial =
+    profile.firstName.charAt(0).toUpperCase() ||
+    profile.lastName.charAt(0).toUpperCase() ||
+    "?";
 
   return (
     <>
       <SafeAreaView
         edges={["top"]}
-        style={styles.safeArea}
+        style={[styles.safeArea, { backgroundColor: "#000000" }]}
       >
-        <View
-          style={[
-            styles.header,
-            isArabic && styles.rowReverse,
-          ]}
-        >
-          <View
-            style={[
-              styles.headerLeft,
-              isArabic && styles.rowReverse,
-            ]}
-          >
+        <View style={[styles.header, isArabic && styles.rowReverse]}>
+          <View style={[styles.headerLeft, isArabic && styles.rowReverse]}>
             <Pressable
               onPress={openDrawer}
               hitSlop={10}
@@ -371,7 +372,6 @@ export default function MchatHeader() {
                 color={COLORS.textStrong}
               />
             </Pressable>
-
             <Image
               source={require("../assets/images/maison-chat-logo.png")}
               style={styles.headerLogo}
@@ -379,40 +379,15 @@ export default function MchatHeader() {
             />
           </View>
 
-          <View
-            style={[
-              styles.headerActions,
-              isArabic && styles.rowReverse,
-            ]}
-          >
-            <Pressable
-              hitSlop={8}
-              style={({ pressed }) => [
-                styles.smallAction,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Ionicons
-                name="download-outline"
-                size={20}
-                color={COLORS.textStrong}
-              />
-            </Pressable>
-
+          <View style={[styles.headerActions, isArabic && styles.rowReverse]}>
             <Pressable
               hitSlop={8}
               onPress={() => setLanguage(isArabic ? "en" : "ar")}
               style={({ pressed }) => [
                 styles.languageAction,
-                isArabic && styles.rowReverse,
                 pressed && styles.pressed,
               ]}
             >
-              <Ionicons
-                name="globe-outline"
-                size={19}
-                color={COLORS.textStrong}
-              />
               <Text style={styles.languageText}>
                 {isArabic ? "EN" : "العربية"}
               </Text>
@@ -420,7 +395,7 @@ export default function MchatHeader() {
 
             <Pressable
               hitSlop={8}
-              onPress={() => router.push("/notifications")}
+              onPress={() => router.push("/(tabs)/notifications" as any)}
               style={({ pressed }) => [
                 styles.notificationButton,
                 pressed && styles.pressed,
@@ -431,7 +406,6 @@ export default function MchatHeader() {
                 size={22}
                 color={COLORS.textStrong}
               />
-
               {unreadNotifications > 0 && (
                 <View style={styles.notificationDot} />
               )}
@@ -450,12 +424,8 @@ export default function MchatHeader() {
         <View style={styles.modalRoot}>
           <Animated.View
             pointerEvents="none"
-            style={[
-              styles.overlay,
-              { opacity: overlayOpacity },
-            ]}
+            style={[styles.overlay, { opacity: overlayOpacity }]}
           />
-
           <Pressable
             style={StyleSheet.absoluteFill}
             onPress={() => closeDrawer()}
@@ -467,28 +437,18 @@ export default function MchatHeader() {
               isArabic ? styles.drawerRight : styles.drawerLeft,
               {
                 width: DRAWER_WIDTH,
-                paddingTop: Math.max(insets.top, 14),
-                paddingBottom: Math.max(insets.bottom, 14),
-                transform: [
-                  {
-                    translateX: drawerTranslate,
-                  },
-                ],
+                paddingTop: Math.max(insets.top, 18),
+                paddingBottom: Math.max(insets.bottom, 18),
+                transform: [{ translateX: drawerTranslate }],
               },
             ]}
           >
-            <View
-              style={[
-                styles.drawerTop,
-                isArabic && styles.rowReverse,
-              ]}
-            >
+            <View style={[styles.drawerTop, isArabic && styles.rowReverse]}>
               <Image
                 source={require("../assets/images/maison-chat-logo.png")}
                 style={styles.drawerLogo}
                 resizeMode="contain"
               />
-
               <Pressable
                 onPress={() => closeDrawer()}
                 hitSlop={10}
@@ -497,29 +457,15 @@ export default function MchatHeader() {
                   pressed && styles.pressed,
                 ]}
               >
-                <Ionicons
-                  name="close"
-                  size={28}
-                  color={COLORS.textStrong}
-                />
+                <Ionicons name="close" size={28} color={COLORS.textStrong} />
               </Pressable>
             </View>
 
-            <Text
-              style={[
-                styles.drawerTagline,
-                isArabic && styles.textRtl,
-              ]}
-            >
-              FRESH FOOD. HAPPY CATS.
+            <Text style={[styles.drawerTagline, isArabic && styles.textRtl]}>
+              FRESH FOOD. HAPPY PETS.
             </Text>
 
-            <Text
-              style={[
-                styles.sectionLabel,
-                isArabic && styles.textRtl,
-              ]}
-            >
+            <Text style={[styles.sectionLabel, isArabic && styles.textRtl]}>
               {isArabic ? "منزلك الصغير" : "YOUR LITTLE MAISON"}
             </Text>
 
@@ -535,31 +481,10 @@ export default function MchatHeader() {
 
             <View style={styles.drawerSpacer} />
 
-            <View style={styles.loveBlock}>
-              <Ionicons
-                name="heart-outline"
-                size={30}
-                color="#8EB9AC"
-              />
-
-              <Text style={styles.loveText}>
-                A little French savoir-faire.
-              </Text>
-
-              <Text style={styles.loveText}>
-                A lot of feline love.
-              </Text>
-
-              <Text style={styles.loveSignature}>
-                FAIT AVEC AMOUR ♡
-              </Text>
-            </View>
-
-            <View style={styles.divider} />
+            <View style={styles.footerDivider} />
 
             <Pressable
-              onPress={confirmLogout}
-              disabled={loggingOut}
+              onPress={() => navigate("/(tabs)/settings")}
               style={({ pressed }) => [
                 styles.profileFooter,
                 isArabic && styles.rowReverse,
@@ -567,44 +492,49 @@ export default function MchatHeader() {
               ]}
             >
               <View style={styles.avatar}>
-                {loggingOut ? (
-                  <ActivityIndicator
-                    size="small"
-                    color="#9C744B"
-                  />
-                ) : (
-                  <Text style={styles.avatarText}>
-                    S
-                  </Text>
-                )}
+                <Text style={styles.avatarText}>{initial}</Text>
               </View>
 
               <View style={styles.profileText}>
                 <Text
                   numberOfLines={1}
-                  style={[
-                    styles.profileName,
-                    isArabic && styles.textRtl,
-                  ]}
+                  style={[styles.profileName, isArabic && styles.textRtl]}
                 >
-                  Sarah & the little ones
+                  {fullName}
                 </Text>
-
-                <Text
-                  style={[
-                    styles.profileRole,
-                    isArabic && styles.textRtl,
-                  ]}
-                >
+                <Text style={[styles.profileRole, isArabic && styles.textRtl]}>
                   {isArabic ? "عضو Maison" : "Maison member"}
                 </Text>
               </View>
 
               <Ionicons
-                name="chevron-down"
+                name={isArabic ? "arrow-back" : "arrow-forward"}
                 size={18}
-                color={COLORS.textStrong}
+                color="#77736D"
               />
+            </Pressable>
+
+            <Pressable
+              onPress={confirmLogout}
+              disabled={loggingOut}
+              style={({ pressed }) => [
+                styles.logoutButton,
+                isArabic && styles.rowReverse,
+                pressed && styles.pressed,
+              ]}
+            >
+              {loggingOut ? (
+                <ActivityIndicator size="small" color={COLORS.coral} />
+              ) : (
+                <Ionicons
+                  name="log-out-outline"
+                  size={20}
+                  color={COLORS.coral}
+                />
+              )}
+              <Text style={[styles.logoutText, isArabic && styles.textRtl]}>
+                {isArabic ? "تسجيل الخروج" : "Log Out"}
+              </Text>
             </Pressable>
           </Animated.View>
         </View>
@@ -615,64 +545,52 @@ export default function MchatHeader() {
 
 const styles = StyleSheet.create({
   safeArea: {
-    backgroundColor: COLORS.drawer,
+    backgroundColor: COLORS.header,
   },
-
   header: {
     height: 70,
     paddingHorizontal: 20,
-    backgroundColor: COLORS.drawer,
+    backgroundColor: COLORS.header,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-
   headerLeft: {
     flexDirection: "row",
     alignItems: "center",
     gap: 13,
   },
-
   headerLogo: {
     width: 91,
     height: 49,
   },
-
   headerIconButton: {
     width: 35,
     height: 42,
     alignItems: "flex-start",
     justifyContent: "center",
   },
-
   headerActions: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 14,
   },
-
-  smallAction: {
-    width: 28,
-    height: 40,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
   languageAction: {
     height: 40,
-    flexDirection: "row",
+    minWidth: 40,
     alignItems: "center",
-    gap: 4,
+    justifyContent: "center",
+    paddingHorizontal: 2,
   },
-
   languageText: {
     fontFamily: "Cairo_500Medium",
-    fontSize: 10,
+    fontSize: 11,
+    lineHeight: 18,
     color: COLORS.textStrong,
+    textAlign: "center",
   },
-
   notificationButton: {
     width: 30,
     height: 40,
@@ -680,7 +598,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     position: "relative",
   },
-
   notificationDot: {
     position: "absolute",
     top: 7,
@@ -690,212 +607,164 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: COLORS.coral,
   },
-
   pressed: {
     opacity: 0.55,
   },
-
   rowReverse: {
     flexDirection: "row-reverse",
   },
-
   textRtl: {
     textAlign: "right",
     writingDirection: "rtl",
   },
-
   modalRoot: {
     flex: 1,
   },
-
   overlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: COLORS.overlay,
   },
-
   drawer: {
     position: "absolute",
     top: 0,
     bottom: 0,
     backgroundColor: COLORS.drawer,
-    paddingHorizontal: 18,
+    paddingHorizontal: 26,
     shadowColor: "#000",
     shadowOpacity: 0.18,
     shadowRadius: 16,
-    shadowOffset: {
-      width: 4,
-      height: 0,
-    },
+    shadowOffset: { width: 4, height: 0 },
     elevation: 18,
   },
-
   drawerLeft: {
     left: 0,
   },
-
   drawerRight: {
     right: 0,
   },
-
   drawerTop: {
-    minHeight: 91,
+    minHeight: 105,
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
   },
-
   drawerLogo: {
-    width: 143,
-    height: 84,
-    marginLeft: 6,
+    width: 150,
+    height: 92,
+    marginLeft: 10,
   },
-
   closeButton: {
     width: 36,
     height: 44,
-    marginTop: 4,
+    marginTop: 0,
     alignItems: "center",
     justifyContent: "center",
   },
-
   drawerTagline: {
-    marginTop: -5,
-    marginLeft: 12,
+    marginTop: -3,
+    marginLeft: 17,
     fontFamily: "Cairo_500Medium",
     fontSize: 7,
-    letterSpacing: 2.1,
+    letterSpacing: 2.4,
     color: COLORS.muted,
   },
-
   sectionLabel: {
     marginTop: 28,
-    marginBottom: 12,
-    marginHorizontal: 12,
+    marginBottom: 14,
+    marginHorizontal: 17,
     fontFamily: "Cairo_500Medium",
-    fontSize: 9,
-    letterSpacing: 2,
-    color: "#9A958E",
+    fontSize: 10,
+    letterSpacing: 2.1,
+    color: "#8F8A83",
   },
-
   menuBlock: {
     gap: 2,
   },
-
   drawerItem: {
-    minHeight: 52,
-    paddingHorizontal: 14,
-    borderRadius: 11,
+    minHeight: 58,
+    paddingHorizontal: 17,
+    borderRadius: 13,
     flexDirection: "row",
     alignItems: "center",
-    gap: 15,
+    gap: 18,
   },
-
   drawerItemActive: {
     backgroundColor: COLORS.primaryLight,
   },
-
   drawerItemPressed: {
     opacity: 0.65,
   },
-
   drawerItemText: {
     flex: 1,
     fontFamily: "Cairo_500Medium",
-    fontSize: 14,
-    lineHeight: 21,
+    fontSize: 16,
+    lineHeight: 24,
     color: COLORS.text,
   },
-
   drawerItemTextActive: {
     fontFamily: "Cairo_700Bold",
     color: COLORS.primary,
   },
-
-  menuBadge: {
-    minWidth: 21,
-    height: 21,
-    paddingHorizontal: 6,
-    borderRadius: 5,
-    backgroundColor: "#D9E9E4",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  menuBadgeText: {
-    fontFamily: "Cairo_600SemiBold",
-    fontSize: 10,
-    color: COLORS.primary,
-  },
-
   divider: {
     height: 1,
     backgroundColor: COLORS.border,
-    marginVertical: 12,
+    marginVertical: 14,
+    marginHorizontal: 17,
   },
-
   drawerSpacer: {
     flex: 1,
     minHeight: 20,
   },
-
-  loveBlock: {
-    alignItems: "center",
-    paddingVertical: 8,
+  footerDivider: {
+    height: 1,
+    backgroundColor: COLORS.border,
+    marginBottom: 14,
   },
-
-  loveText: {
-    marginTop: 5,
-    fontFamily: "Cairo_400Regular",
-    fontSize: 10.5,
-    color: "#6F6B65",
-    textAlign: "center",
-  },
-
-  loveSignature: {
-    marginTop: 14,
-    fontFamily: "Cairo_500Medium",
-    fontSize: 7,
-    letterSpacing: 2,
-    color: "#A78F7B",
-  },
-
   profileFooter: {
-    minHeight: 58,
+    minHeight: 67,
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: 13,
+    paddingHorizontal: 5,
   },
-
   avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     backgroundColor: "#F2E6D8",
     alignItems: "center",
     justifyContent: "center",
   },
-
   avatarText: {
     fontFamily: "Cairo_700Bold",
-    fontSize: 14,
-    color: "#9C744B",
+    fontSize: 18,
+    color: "#77736D",
   },
-
   profileText: {
     flex: 1,
   },
-
   profileName: {
     fontFamily: "Cairo_700Bold",
-    fontSize: 11,
-    lineHeight: 17,
+    fontSize: 13,
+    lineHeight: 20,
     color: COLORS.textStrong,
   },
-
   profileRole: {
     fontFamily: "Cairo_400Regular",
-    fontSize: 9.5,
-    lineHeight: 15,
+    fontSize: 11,
+    lineHeight: 17,
     color: COLORS.muted,
+  },
+  logoutButton: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingHorizontal: 5,
+  },
+  logoutText: {
+    fontFamily: "Cairo_400Regular",
+    fontSize: 12,
+    color: COLORS.text,
   },
 });

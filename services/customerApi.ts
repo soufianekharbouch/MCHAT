@@ -5,10 +5,8 @@ import type {
   Pet,
 } from '../types/customer';
 
-
 const API_URL =
   'https://animal-care2.kharbouch-soufiane.com/api/mobile';
-
 
 /*
 |--------------------------------------------------------------------------
@@ -31,7 +29,6 @@ export class ApiError extends Error {
   }
 
 }
-
 
 /*
 |--------------------------------------------------------------------------
@@ -65,12 +62,17 @@ export type PetPayload = {
     | string
     | null;
 
+  breed?: string | null;
+  weight_kg?: string | number | null;
+  sex?: string | null;
+  allergies?: string | null;
+  preferences?: string | null;
+  remove_photo?: boolean;
   photoUri?:
     | string
     | null;
 
 };
-
 
 type PetResponse = {
 
@@ -82,7 +84,6 @@ type PetResponse = {
 
 };
 
-
 type DeletePetResponse = {
 
   success: boolean;
@@ -90,7 +91,6 @@ type DeletePetResponse = {
   message?: string;
 
 };
-
 
 /*
 |--------------------------------------------------------------------------
@@ -116,7 +116,6 @@ async function getAccessToken(): Promise<string> {
 
 }
 
-
 /*
 |--------------------------------------------------------------------------
 | READ JSON RESPONSE
@@ -141,7 +140,6 @@ async function readJson<T>(
   }
 
 }
-
 
 /*
 |--------------------------------------------------------------------------
@@ -174,7 +172,6 @@ function checkResponse(
 
 }
 
-
 /*
 |--------------------------------------------------------------------------
 | CUSTOMER DATA
@@ -186,7 +183,6 @@ export async function getCustomerData():
 
   const token =
     await getAccessToken();
-
 
   const response =
     await fetch(
@@ -209,12 +205,10 @@ export async function getCustomerData():
       }
     );
 
-
   const data =
     await readJson<CustomerDataResponse>(
       response
     );
-
 
   checkResponse(
     response,
@@ -222,11 +216,9 @@ export async function getCustomerData():
     'Unable to load customer data'
   );
 
-
   return data;
 
 }
-
 
 /*
 |--------------------------------------------------------------------------
@@ -411,7 +403,6 @@ export async function updateCustomerEmail(
   return data;
 }
 
-
 /*
 |--------------------------------------------------------------------------
 | CREATE PET
@@ -425,13 +416,11 @@ export async function createPet(
   const token =
     await getAccessToken();
 
-
   const formData =
     createPetFormData(
       token,
       payload
     );
-
 
   const response =
     await fetch(
@@ -449,12 +438,10 @@ export async function createPet(
       }
     );
 
-
   const data =
     await readJson<PetResponse>(
       response
     );
-
 
   checkResponse(
     response,
@@ -462,11 +449,9 @@ export async function createPet(
     'Unable to create pet'
   );
 
-
   return data;
 
 }
-
 
 /*
 |--------------------------------------------------------------------------
@@ -482,13 +467,11 @@ export async function updatePet(
   const token =
     await getAccessToken();
 
-
   const formData =
     createPetFormData(
       token,
       payload
     );
-
 
   const response =
     await fetch(
@@ -506,12 +489,10 @@ export async function updatePet(
       }
     );
 
-
   const data =
     await readJson<PetResponse>(
       response
     );
-
 
   checkResponse(
     response,
@@ -519,11 +500,9 @@ export async function updatePet(
     'Unable to update pet'
   );
 
-
   return data;
 
 }
-
 
 /*
 |--------------------------------------------------------------------------
@@ -539,22 +518,18 @@ export async function updatePetPhoto(
   const token =
     await getAccessToken();
 
-
   const formData =
     new FormData();
-
 
   formData.append(
     'access_token',
     token
   );
 
-
   appendPhoto(
     formData,
     photoUri
   );
-
 
   const response =
     await fetch(
@@ -572,12 +547,10 @@ export async function updatePetPhoto(
       }
     );
 
-
   const data =
     await readJson<PetResponse>(
       response
     );
-
 
   checkResponse(
     response,
@@ -585,11 +558,9 @@ export async function updatePetPhoto(
     'Unable to update pet photo'
   );
 
-
   return data;
 
 }
-
 
 /*
 |--------------------------------------------------------------------------
@@ -603,7 +574,6 @@ export async function deletePet(
 
   const token =
     await getAccessToken();
-
 
   const response =
     await fetch(
@@ -626,12 +596,10 @@ export async function deletePet(
       }
     );
 
-
   const data =
     await readJson<DeletePetResponse>(
       response
     );
-
 
   checkResponse(
     response,
@@ -639,11 +607,9 @@ export async function deletePet(
     'Unable to delete pet'
   );
 
-
   return data;
 
 }
-
 
 /*
 |--------------------------------------------------------------------------
@@ -659,7 +625,6 @@ function createPetFormData(
   const formData =
     new FormData();
 
-
   /*
   |--------------------------------------------------------------------------
   | AUTH
@@ -670,7 +635,6 @@ function createPetFormData(
     'access_token',
     token
   );
-
 
   /*
   |--------------------------------------------------------------------------
@@ -683,12 +647,10 @@ function createPetFormData(
     payload.name
   );
 
-
   formData.append(
     'species',
     payload.species
   );
-
 
   /*
   |--------------------------------------------------------------------------
@@ -708,7 +670,6 @@ function createPetFormData(
     );
 
   }
-
 
   /*
   |--------------------------------------------------------------------------
@@ -736,7 +697,6 @@ function createPetFormData(
 
   }
 
-
   /*
   |--------------------------------------------------------------------------
   | HEALTH STATUS
@@ -762,7 +722,6 @@ function createPetFormData(
     );
 
   }
-
 
   /*
   |--------------------------------------------------------------------------
@@ -790,7 +749,6 @@ function createPetFormData(
 
   }
 
-
   /*
   |--------------------------------------------------------------------------
   | PHOTO
@@ -806,11 +764,20 @@ function createPetFormData(
 
   }
 
+  // Optional profile fields: include empty values to allow clearing them.
+  for (const key of ['breed', 'weight_kg', 'sex', 'allergies', 'preferences'] as const) {
+    const value = payload[key];
+    if (value !== undefined) {
+      formData.append(key, value === null ? '' : String(value));
+    }
+  }
+  if (payload.remove_photo !== undefined) {
+    formData.append('remove_photo', payload.remove_photo ? '1' : '0');
+  }
 
   return formData;
 
 }
-
 
 /*
 |--------------------------------------------------------------------------
@@ -826,21 +793,17 @@ function appendPhoto(
   const cleanUri =
     photoUri.split('?')[0];
 
-
   const extension =
     cleanUri
       .split('.')
       .pop()
       ?.toLowerCase();
 
-
   let mimeType =
     'image/jpeg';
 
-
   let fileExtension =
     'jpg';
-
 
   if (extension === 'png') {
 
@@ -871,7 +834,6 @@ function appendPhoto(
       'jpeg';
 
   }
-
 
   formData.append(
     'photo',
