@@ -290,6 +290,7 @@ export default function TabsLayout() {
     <CustomerDataProvider>
 
       <Tabs
+        backBehavior="history"
         screenOptions={{
 
           /*
@@ -664,6 +665,75 @@ export default function TabsLayout() {
             title: isArabic
               ? "قاعدة المعرفة"
               : "Help Knowledge Base",
+          }}
+        />
+
+        {/*
+        |--------------------------------------------------------------------------
+        | PLANS, PURCHASES & DELIVERIES
+        |--------------------------------------------------------------------------
+        |
+        | Routes available but hidden from bottom navigation.
+        |
+        */}
+
+        <Tabs.Screen
+          name="plans"
+          options={{
+            href: null,
+            title: isArabic
+              ? "الباقات"
+              : "Plans",
+          }}
+        />
+
+        <Tabs.Screen
+          name="purchase"
+          options={{
+            href: null,
+            title: isArabic
+              ? "الاشتراك"
+              : "Subscription",
+          }}
+        />
+
+        <Tabs.Screen
+          name="distribute-package"
+          options={{
+            href: null,
+            title: isArabic
+              ? "توزيع الباقة"
+              : "Distribute Package",
+          }}
+        />
+
+        <Tabs.Screen
+          name="manage-delivery"
+          options={{
+            href: null,
+            title: isArabic
+              ? "إدارة التوصيل"
+              : "Manage Delivery",
+          }}
+        />
+
+        <Tabs.Screen
+          name="delivery-calendar"
+          options={{
+            href: null,
+            title: isArabic
+              ? "تقويم التوصيل"
+              : "Delivery Calendar",
+          }}
+        />
+
+        <Tabs.Screen
+          name="delivery-history"
+          options={{
+            href: null,
+            title: isArabic
+              ? "سجل التوصيل"
+              : "Delivery History",
           }}
         />
       </Tabs>

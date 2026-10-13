@@ -360,6 +360,14 @@ export default function LoginScreen() {
       ? "جاري تسجيل الدخول..."
       : "Signing in...",
 
+    noAccount: isArabic
+      ? "ليس لديك حساب بعد؟"
+      : "Don't have an account yet?",
+
+    signUp: isArabic
+      ? "إنشاء حساب"
+      : "Sign Up",
+
     languageButton: isArabic
       ? "EN"
       : "العربية",
@@ -376,6 +384,23 @@ export default function LoginScreen() {
     // Connect your forgot-password page here later.
     // Example:
     // router.push("/forgot-password");
+  };
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | SIGN UP
+  |--------------------------------------------------------------------------
+  */
+
+  const handleSignUp = () => {
+    if (loading) {
+      return;
+    }
+
+    setError("");
+
+    router.push("/register");
   };
 
 
@@ -659,6 +684,34 @@ export default function LoginScreen() {
             </Pressable>
 
 
+            {/* SIGN UP LINK */}
+
+            <View
+              style={[
+                styles.signUpRow,
+                isArabic &&
+                  styles.signUpRowArabic,
+              ]}
+            >
+
+              <Text style={styles.signUpText}>
+                {screenText.noAccount}
+              </Text>
+
+
+              <Pressable
+                onPress={handleSignUp}
+                disabled={loading}
+                hitSlop={10}
+              >
+                <Text style={styles.signUpLink}>
+                  {screenText.signUp}
+                </Text>
+              </Pressable>
+
+            </View>
+
+
             {/* BOTTOM LINE */}
 
             <View style={styles.bottomDivider} />
@@ -799,7 +852,7 @@ const styles = StyleSheet.create({
 
     justifyContent: "center",
 
-    marginTop:15,
+    marginTop: 15,
 
     marginBottom: 15,
   },
@@ -1101,6 +1154,60 @@ const styles = StyleSheet.create({
     justifyContent: "center",
 
     gap: 10,
+  },
+
+
+  /*
+  |--------------------------------------------------------------------------
+  | SIGN UP
+  |--------------------------------------------------------------------------
+  */
+
+  signUpRow: {
+    width: "100%",
+
+    flexDirection: "row",
+
+    justifyContent: "center",
+
+    alignItems: "center",
+
+    flexWrap: "wrap",
+
+    gap: 6,
+
+    marginTop: -12,
+
+    marginBottom: 28,
+  },
+
+
+  signUpRowArabic: {
+    flexDirection: "row-reverse",
+  },
+
+
+  signUpText: {
+    fontFamily: "Cairo_400Regular",
+
+    fontSize: 14,
+
+    lineHeight: 22,
+
+    color: COLORS.muted,
+  },
+
+
+  signUpLink: {
+    fontFamily: "Cairo_700Bold",
+
+    fontSize: 14,
+
+    lineHeight: 22,
+
+    color: COLORS.text,
+
+    textDecorationLine: "underline",
   },
 
 

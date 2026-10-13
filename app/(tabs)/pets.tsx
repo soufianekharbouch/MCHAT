@@ -7,6 +7,9 @@ import { useAppLanguage, } from "../../context/LanguageContext";
 import { useCustomerData, } from "../../context/CustomerDataContext";
 import { deletePet, } from "../../services/customerApi";
 import type { Pet, } from "../../types/customer";
+import { fetchPurchases, } from "../../services/purchaseApi";
+import type { PurchaseSummary, } from "../../types/purchase";
+import { formatDate, } from "../../components/purchase/purchaseUtils";
 const COLORS = {
     background: "#F4F1EC",
     primary: "#249B97",
@@ -31,9 +34,25 @@ export default function PetsScreen() {
     const { width, } = useWindowDimensions();
     const isCompact = width < 460;
     const [viewMode, setViewMode,] = useState<ViewMode>("list");
+    /*
+     * Packs (purchases) of all pets: the status, the next delivery
+     * and the bottom button of each card come from them.
+     */
+    const [purchases, setPurchases,] = useState<PurchaseSummary[]>([]);
+    const loadPurchases = useCallback(async () => {
+        try {
+            setPurchases(await fetchPurchases(isArabic ? "ar" : "en"));
+        }
+        catch (purchaseError) {
+            console.error("Unable to load purchases:", purchaseError);
+        }
+    }, [isArabic]);
+    const refreshAll = useCallback(async () => {
+        await Promise.all([refresh(), loadPurchases()]);
+    }, [refresh, loadPurchases]);
     useFocusEffect(useCallback(() => {
-        void refresh();
-    }, [refresh]));
+        void refreshAll();
+    }, [refreshAll]));
     const t = isArabic
         ? {
             title: "حيواناتي الأليفة",
@@ -41,9 +60,12 @@ export default function PetsScreen() {
             renewPlans: "تجديد الخطط",
             addPet: "إضافة حيوان",
             active: "نشط",
-            inactive: "لا يوجد اشتراك",
+            inactive: "لا يوجد اشتراك نشط",
+            pending: "بانتظار الدفع",
             manage: "إدارة",
             editSubscription: "تعديل الاشتراك",
+            viewPlan: "عرض الطلب",
+            choosePlan: "اختيار باقة",
             next: "التالي:",
             none: "لا يوجد",
             meals: "وجبة",
@@ -64,9 +86,12 @@ export default function PetsScreen() {
             renewPlans: "Renew Plans",
             addPet: "Add New Pet",
             active: "Active",
-            inactive: "No subscription",
+            inactive: "No active plan",
+            pending: "Awaiting payment",
             manage: "Manage",
             editSubscription: "Edit Subscription",
+            viewPlan: "View order",
+            choosePlan: "Choose a plan",
             next: "Next:",
             none: "None",
             meals: "Meals",
@@ -93,15 +118,36 @@ export default function PetsScreen() {
             },
         });
     };
-    const openEditSubscription = (pet: Pet) => {
-        router.push({
-            pathname: "/pet-form",
-            params: {
-                id: String(pet.id),
-            },
-        });
+    /*
+     * Best plan of a pet: active/paid first, then pending.
+     * Finished / cancelled plans are ignored here.
+     */
+    const planFor = (pet: Pet): PurchaseSummary | null => {
+        const ofPet = purchases.filter(purchase => Number(purchase.animal?.id) === Number(pet.id));
+        return ofPet.find(purchase => purchase.is_active)
+            ?? ofPet.find(purchase => purchase.status === "pending")
+            ?? null;
+    };
+    /*
+     * Bottom button of the card:
+     *  - active plan  -> Edit Subscription (pet profile with the plan card)
+     *  - pending plan -> the order (payment / receipt)
+     *  - no plan      -> Choose a plan (plans page for this pet)
+     */
+    const openSubscriptionAction = (pet: Pet) => {
+        const plan = planFor(pet);
+        if (plan?.is_active) {
+            router.push({ pathname: "/pet-form", params: { id: String(pet.id) } });
+            return;
+        }
+        if (plan) {
+            router.push({ pathname: "/purchase", params: { id: String(plan.id) } });
+            return;
+        }
+        router.push({ pathname: "/plans", params: { animalId: String(pet.id) } });
     };
     const openRenewPlans = () => {
+        router.push("/plans");
     };
     const confirmDeletePet = (pet: Pet) => {
         Alert.alert(t.deleteTitle, t.deleteMessage, [
@@ -149,7 +195,7 @@ export default function PetsScreen() {
             styles.page,
             isCompact &&
                 styles.pageCompact,
-        ]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={loading} onRefresh={refresh} tintColor={COLORS.primary} colors={[
+        ]} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => void refreshAll()} tintColor={COLORS.primary} colors={[
                 COLORS.primary,
             ]}/>}>
 
@@ -343,11 +389,11 @@ export default function PetsScreen() {
             "list" ? (<View style={styles.listContainer}>
 
             {pets.map((pet, index) => (<PetListItem key={pet.id} pet={pet as ExtendedPet} t={t} isArabic={isArabic} isCompact={isCompact} isLast={index ===
-                    pets.length - 1} onManage={() => openManagePet(pet)} onEditSubscription={() => openEditSubscription(pet)}/>))}
+                    pets.length - 1} onManage={() => openManagePet(pet)} plan={planFor(pet)} onEditSubscription={() => openSubscriptionAction(pet)}/>))}
 
           </View>) : (<View style={styles.gridContainer}>
 
-            {pets.map((pet) => (<PetGridCard key={pet.id} pet={pet as ExtendedPet} t={t} isArabic={isArabic} isCompact={isCompact} onManage={() => openManagePet(pet)} onEditSubscription={() => openEditSubscription(pet)}/>))}
+            {pets.map((pet) => (<PetGridCard key={pet.id} pet={pet as ExtendedPet} t={t} isArabic={isArabic} isCompact={isCompact} onManage={() => openManagePet(pet)} plan={planFor(pet)} onEditSubscription={() => openSubscriptionAction(pet)}/>))}
 
           </View>)}
 
@@ -355,26 +401,51 @@ export default function PetsScreen() {
 
     </SafeAreaView>);
 }
-function getPetData(pet: ExtendedPet, t: any) {
-    const active = pet.subscription_status ===
-        "active";
-    const nextDate = pet.next_order
-        ?.scheduled_for ||
+function getPetData(pet: ExtendedPet, t: any, purchase: PurchaseSummary | null, isArabic: boolean) {
+    /*
+     * Status:
+     *  - pack bought in the app / back-office (purchases) -> real status
+     *  - old back-office subscription: "active" only if the pet
+     *    still has an upcoming planned order
+     */
+    const legacyActive = pet.subscription_status === "active" &&
+        !!pet.next_order;
+    const active = !!purchase?.is_active || legacyActive;
+    const pending = !active && purchase?.status === "pending";
+    const statusLabel = active
+        ? t.active
+        : pending
+            ? t.pending
+            : t.inactive;
+    const nextISO = purchase?.next_delivery?.date ||
+        (legacyActive ? pet.next_order?.scheduled_for : null) ||
         null;
-    const sourceOrder = pet.next_order ||
-        pet.orders?.[0];
-    const recipe = sourceOrder
-        ?.items?.[0]
-        ?.recipe?.name ||
-        null;
-    const meals = sourceOrder
-        ?.items?.reduce((total: number, item: any) => total +
-        Number(item.quantity || 0), 0) || 0;
-    const plan = recipe
-        ? `${recipe}${meals
-            ? ` (${meals} ${t.meals})`
-            : ""}`
+    const nextDate = nextISO
+        ? formatDate(nextISO, isArabic)
         : null;
+    let plan: string | null = null;
+    if (purchase) {
+        plan = `${purchase.product.name} (${purchase.usage.total_recipes} ${t.meals})`;
+    }
+    else if (legacyActive) {
+        const sourceOrder = pet.next_order;
+        const recipe = sourceOrder?.items?.[0]?.recipe?.name || null;
+        const meals = sourceOrder?.items?.reduce((total: number, item: any) => total +
+            Number(item.quantity || 0), 0) || 0;
+        plan = recipe
+            ? `${recipe}${meals ? ` (${meals} ${t.meals})` : ""}`
+            : null;
+    }
+    const actionLabel = active
+        ? t.editSubscription
+        : pending
+            ? t.viewPlan
+            : t.choosePlan;
+    const actionIcon: any = active
+        ? "pencil-outline"
+        : pending
+            ? "receipt-outline"
+            : "sparkles-outline";
     const details = [
         pet.breed_size_category ||
             null,
@@ -386,12 +457,16 @@ function getPetData(pet: ExtendedPet, t: any) {
         .filter(Boolean);
     return {
         active,
+        pending,
+        statusLabel,
         nextDate,
         plan,
         details,
+        actionLabel,
+        actionIcon,
     };
 }
-function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, onEditSubscription, }: {
+function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, onEditSubscription, plan: purchase, }: {
     pet: ExtendedPet;
     t: any;
     isArabic: boolean;
@@ -399,8 +474,9 @@ function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, onEditSubs
     isLast: boolean;
     onManage: () => void;
     onEditSubscription: () => void;
+    plan: PurchaseSummary | null;
 }) {
-    const { active, nextDate, plan, details, } = getPetData(pet, t);
+    const { active, pending, statusLabel, nextDate, plan, details, actionLabel, actionIcon, } = getPetData(pet, t, purchase, isArabic);
     return (<View style={[
             styles.listPet,
             !isLast &&
@@ -450,13 +526,13 @@ function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, onEditSubs
             styles.statusDot,
             !active &&
                 styles.statusDotInactive,
+            pending &&
+                styles.statusDotPending,
         ]}/>
 
               <Text style={styles.statusText}>
 
-                {active
-            ? t.active
-            : t.inactive}
+                {statusLabel}
 
               </Text>
 
@@ -557,7 +633,7 @@ function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, onEditSubs
                 styles.rowRtl,
         ]}>
 
-          <Ionicons name="pencil-outline" size={18} color={COLORS.primary}/>
+          <Ionicons name={actionIcon} size={18} color={COLORS.primary}/>
 
           <Text numberOfLines={1} style={[
             styles.actionText,
@@ -565,7 +641,7 @@ function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, onEditSubs
                 styles.actionTextCompact,
         ]}>
 
-            {t.editSubscription}
+            {actionLabel}
 
           </Text>
 
@@ -575,15 +651,16 @@ function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, onEditSubs
 
     </View>);
 }
-function PetGridCard({ pet, t, isArabic, isCompact, onManage, onEditSubscription, }: {
+function PetGridCard({ pet, t, isArabic, isCompact, onManage, onEditSubscription, plan: purchase, }: {
     pet: ExtendedPet;
     t: any;
     isArabic: boolean;
     isCompact: boolean;
     onManage: () => void;
     onEditSubscription: () => void;
+    plan: PurchaseSummary | null;
 }) {
-    const { active, nextDate, plan, details, } = getPetData(pet, t);
+    const { active, pending, statusLabel, nextDate, plan, details, actionLabel, actionIcon, } = getPetData(pet, t, purchase, isArabic);
     return (<View style={[
             styles.gridCard,
             isCompact &&
@@ -611,9 +688,7 @@ function PetGridCard({ pet, t, isArabic, isCompact, onManage, onEditSubscription
                 styles.textRtl,
         ]}>
 
-        {active
-            ? t.active
-            : t.inactive}
+        {statusLabel}
 
       </Text>
 
@@ -698,7 +773,7 @@ function PetGridCard({ pet, t, isArabic, isCompact, onManage, onEditSubscription
                 styles.rowRtl,
         ]}>
 
-        <Ionicons name="pencil-outline" size={18} color={COLORS.primary}/>
+        <Ionicons name={actionIcon} size={18} color={COLORS.primary}/>
 
         <Text numberOfLines={2} style={[
             styles.actionText,
@@ -706,7 +781,7 @@ function PetGridCard({ pet, t, isArabic, isCompact, onManage, onEditSubscription
                 styles.actionTextCompact,
         ]}>
 
-          {t.editSubscription}
+          {actionLabel}
 
         </Text>
 
@@ -961,6 +1036,9 @@ const styles = StyleSheet.create({
     statusDotInactive: {
         backgroundColor: COLORS.muted,
     },
+    statusDotPending: {
+        backgroundColor: "#E9A23B",
+    },
     statusText: {
         fontFamily: "Cairo_500Medium",
         fontSize: 12,
@@ -1186,4 +1264,3 @@ const styles = StyleSheet.create({
         writingDirection: "rtl",
     },
 });
-

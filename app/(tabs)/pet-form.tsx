@@ -1,4 +1,5 @@
 import React, {
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -31,6 +32,7 @@ import {
 
 import {
   router,
+  useFocusEffect,
   useLocalSearchParams,
 } from "expo-router";
 
@@ -53,6 +55,16 @@ import type {
   Pet,
 } from "../../types/customer";
 
+import {
+  fetchPurchases,
+} from "../../services/purchaseApi";
+
+import type {
+  PurchaseSummary,
+} from "../../types/purchase";
+
+import SubscriptionCard from "../../components/purchase/SubscriptionCard";
+
 /*
 |--------------------------------------------------------------------------
 | COLORS
@@ -73,6 +85,32 @@ const COLORS = {
   danger: "#EB6268",
   overlay: "rgba(0,0,0,0.38)",
 };
+
+/*
+|--------------------------------------------------------------------------
+| AGE CHOICES
+|--------------------------------------------------------------------------
+|
+| Same values as the back-office form (animals.age):
+|   Cat: Kitten / Adult / Senior
+|   Dog: Puppy  / Adult / Senior
+| The English value is saved, the label is translated.
+|
+*/
+
+const AGE_VALUES: Record<"Cat" | "Dog", string[]> = {
+  Cat: ["Kitten", "Adult", "Senior"],
+  Dog: ["Puppy", "Adult", "Senior"],
+};
+
+const ageOptionsFor = (
+  species: "Cat" | "Dog",
+  t: any
+) =>
+  AGE_VALUES[species].map(value => ({
+    value,
+    label: t.ageLabels[value] ?? value,
+  }));
 
 /*
 |--------------------------------------------------------------------------
@@ -155,7 +193,13 @@ export default function PetFormScreen() {
 
         name: "الاسم",
         breed: "السلالة",
-        ageYears: "العمر (سنوات)",
+        ageYears: "العمر",
+        ageLabels: {
+          Kitten: "صغير (قطيط)",
+          Puppy: "صغير (جرو)",
+          Adult: "بالغ",
+          Senior: "كبير السن",
+        } as Record<string, string>,
         weightKg: "الوزن (كغ)",
         sex: "الجنس",
         male: "ذكر",
@@ -222,6 +266,11 @@ export default function PetFormScreen() {
 
         unknown: "غير محدد",
         none: "لا يوجد",
+
+        noPlanTitle: "لا توجد باقة نشطة",
+        noPlanText: "اختر باقة وجبات طازجة لهذا الحيوان، ثم حدد مواعيد التوصيل.",
+        choosePlan: "اختيار باقة",
+        planHistory: "الباقات السابقة",
       }
 
     : {
@@ -236,7 +285,13 @@ export default function PetFormScreen() {
 
         name: "Name",
         breed: "Breed",
-        ageYears: "Age (years)",
+        ageYears: "Age",
+        ageLabels: {
+          Kitten: "Kitten",
+          Puppy: "Puppy",
+          Adult: "Adult",
+          Senior: "Senior",
+        } as Record<string, string>,
         weightKg: "Weight (kg)",
         sex: "Sex",
         male: "Male",
@@ -306,6 +361,11 @@ export default function PetFormScreen() {
 
         unknown: "Not specified",
         none: "None",
+
+        noPlanTitle: "No active plan",
+        noPlanText: "Choose a fresh meal plan for this pet, then pick your delivery dates.",
+        choosePlan: "Choose a plan",
+        planHistory: "Previous plans",
       };
 
   /*
@@ -340,6 +400,93 @@ export default function PetFormScreen() {
 
   const isEditing =
     petId !== null;
+
+  /*
+  |--------------------------------------------------------------------------
+  | PURCHASES OF THIS PET (shown as the subscription card)
+  |--------------------------------------------------------------------------
+  */
+
+  const [
+    purchases,
+    setPurchases,
+  ] = useState<PurchaseSummary[]>([]);
+
+  const [
+    purchasesLoading,
+    setPurchasesLoading,
+  ] = useState(false);
+
+  const loadPurchases = useCallback(async () => {
+
+    if (!petId) {
+      return;
+    }
+
+    try {
+      setPurchasesLoading(true);
+
+      setPurchases(
+        await fetchPurchases(
+          isArabic ? "ar" : "en",
+          { animalId: petId }
+        )
+      );
+    } catch (error) {
+      console.error(
+        "Unable to load pet purchases:",
+        error
+      );
+    } finally {
+      setPurchasesLoading(false);
+    }
+
+  }, [petId, isArabic]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadPurchases();
+    }, [loadPurchases])
+  );
+
+  /*
+   * Plan shown on the card: active > paid > pending,
+   * otherwise the most recent finished one (to renew it).
+   */
+  const currentPurchase =
+    useMemo<PurchaseSummary | null>(() => {
+
+      const byPriority = ["active", "paid", "pending"];
+
+      for (const status of byPriority) {
+        const found = purchases.find(
+          purchase => purchase.status === status
+        );
+
+        if (found) {
+          return found;
+        }
+      }
+
+      return purchases.find(
+        purchase =>
+          purchase.status === "completed" ||
+          purchase.status === "expired"
+      ) ?? null;
+
+    }, [purchases]);
+
+  const openPlans = () =>
+    router.push({
+      pathname: "/plans",
+      params: petId ? { animalId: String(petId) } : {},
+    });
+
+  const openPurchase = (purchase: PurchaseSummary) =>
+    router.push({
+      pathname: "/purchase",
+      params: { id: String(purchase.id) },
+    });
 
   /*
   |--------------------------------------------------------------------------
@@ -751,6 +898,14 @@ export default function PetFormScreen() {
 
   };
 
+  /*
+  | Back always returns to the Pets tab
+  | (router.back() inside Tabs goes to the Home tab)
+  */
+  const goBackToPets = () => {
+    router.navigate("/(tabs)/pets");
+  };
+
   const closeEditProfile = () => {
     if (saving) {
       return;
@@ -759,7 +914,7 @@ export default function PetFormScreen() {
     setEditVisible(false);
 
     if (!isEditing) {
-      router.back();
+      goBackToPets();
     }
   };
 
@@ -953,7 +1108,7 @@ export default function PetFormScreen() {
                 styles.primarySimpleButton,
                 { marginTop: 24 },
               ]}
-              onPress={() => router.back()}
+              onPress={() => router.push("/(tabs)/pets")}
             >
               <Ionicons
                 name={isArabic ? "arrow-forward" : "arrow-back"}
@@ -1028,33 +1183,47 @@ export default function PetFormScreen() {
   |--------------------------------------------------------------------------
   */
 
-  const active =
-    existingPet
-      ?.subscription_status ===
-    "active";
+  /*
+   * Empty fields are not displayed (null = hidden)
+   * to keep the profile page light.
+   */
+
+  const filled = (value: unknown): string | null => {
+    if (value === null || value === undefined) return null;
+    const text = String(value).trim();
+    return text ? text : null;
+  };
 
   const displayBreed =
-    existingPet?.breed ||
-    existingPet?.breed_size_category ||
-    t.unknown;
+    filled(existingPet?.breed) ??
+    filled(existingPet?.breed_size_category);
+
+  const rawSex =
+    filled(existingPet?.sex) ??
+    filled(existingPet?.gender);
 
   const displaySex =
-    existingPet?.sex ||
-    existingPet?.gender ||
-    t.unknown;
+    rawSex === "Male"
+      ? t.male
+      : rawSex === "Female"
+        ? t.female
+        : rawSex;
+
+  const rawAge = filled(existingPet?.age);
 
   const displayAge =
-    existingPet?.age_years != null
-      ? `${existingPet.age_years} years`
-      : existingPet?.age ||
-        t.unknown;
+    rawAge
+      ? t.ageLabels[rawAge] ?? rawAge
+      : null;
+
+  const rawWeight =
+    filled(existingPet?.weight_kg) ??
+    filled(existingPet?.weight);
 
   const displayWeight =
-    existingPet?.weight_kg != null
-      ? `${existingPet.weight_kg} kg`
-      : existingPet?.weight != null
-        ? `${existingPet.weight} kg`
-        : null;
+    rawWeight
+      ? `${rawWeight} kg`
+      : null;
 
   const allergyList =
     Array.isArray(
@@ -1073,74 +1242,20 @@ export default function PetFormScreen() {
         : [];
 
   const displayPreferences =
-    existingPet?.preferences ||
-    t.none;
+    filled(existingPet?.preferences);
 
   const displayHealthNotes =
-    existingPet?.health_notes ||
-    existingPet?.note ||
-    t.none;
+    filled(existingPet?.health_notes) ??
+    filled(existingPet?.note);
 
-  /*
-  |--------------------------------------------------------------------------
-  | SUBSCRIPTION
-  |--------------------------------------------------------------------------
-  */
+  // Rows of the information table that have a value
+  const infoRows = [
+    allergyList.length > 0 ? "allergies" : null,
+    displayPreferences ? "preferences" : null,
+    displayHealthNotes ? "healthNotes" : null,
+  ].filter(Boolean) as string[];
 
-  const sourceOrder =
-    existingPet?.next_order ||
-    existingPet?.orders?.[0];
-
-  const recipeName =
-    sourceOrder
-      ?.items?.[0]
-      ?.recipe?.name ||
-    "Maison Fresh Gourmet";
-
-  const mealCount =
-    sourceOrder
-      ?.items?.reduce(
-        (
-          total: number,
-          item: any
-        ) =>
-          total +
-          Number(
-            item.quantity || 0
-          ),
-        0
-      ) ||
-    30;
-
-  const subscriptionTitle =
-    `${recipeName} (${mealCount} Meals)`;
-
-  const packageSize =
-    mealCount;
-
-  const price =
-    existingPet?.subscription
-      ?.price ||
-    sourceOrder?.total ||
-    295;
-
-  const currency =
-    existingPet?.subscription
-      ?.currency ||
-    sourceOrder?.currency ||
-    "AED";
-
-  const cycleStarted =
-    existingPet?.subscription
-      ?.cycle_started ||
-    "2026-09-01";
-
-  const nextRenewal =
-    existingPet?.subscription
-      ?.next_renewal ||
-    existingPet?.next_order
-      ?.scheduled_for ||
-    "2026-10-01";
+  const lastInfoRow = infoRows[infoRows.length - 1];
 
   /*
   |--------------------------------------------------------------------------
@@ -1198,9 +1313,7 @@ export default function PetFormScreen() {
               isArabic &&
                 styles.rowRtl,
             ]}
-            onPress={() =>
-              router.back()
-            }
+            onPress={goBackToPets}
           >
 
             <Ionicons
@@ -1310,16 +1423,18 @@ export default function PetFormScreen() {
             }
           >
 
-            <Text
-              style={[
-                styles.profileBreed,
+            {!!displayBreed && (
+              <Text
+                style={[
+                  styles.profileBreed,
 
-                isArabic &&
-                  styles.textRtl,
-              ]}
-            >
-              {displayBreed}
-            </Text>
+                  isArabic &&
+                    styles.textRtl,
+                ]}
+              >
+                {displayBreed}
+              </Text>
+            )}
 
             <Text
               style={[
@@ -1335,17 +1450,20 @@ export default function PetFormScreen() {
               }
             </Text>
 
-            <Text
-              style={[
-                styles.profileSex,
+            {!!displaySex && (
+              <Text
+                style={[
+                  styles.profileSex,
 
-                isArabic &&
-                  styles.textRtl,
-              ]}
-            >
-              {displaySex}
-            </Text>
+                  isArabic &&
+                    styles.textRtl,
+                ]}
+              >
+                {displaySex}
+              </Text>
+            )}
 
+            {(!!displayAge || !!displayWeight) && (
             <View
               style={[
                 styles.ageWeightRow,
@@ -1355,21 +1473,25 @@ export default function PetFormScreen() {
               ]}
             >
 
-              <Text
-                style={
-                  styles.ageWeightText
-                }
-              >
-                {displayAge}
-              </Text>
+              {!!displayAge && (
+                <Text
+                  style={
+                    styles.ageWeightText
+                  }
+                >
+                  {displayAge}
+                </Text>
+              )}
 
               {!!displayWeight && (
                 <>
-                  <View
-                    style={
-                      styles.verticalDivider
-                    }
-                  />
+                  {!!displayAge && (
+                    <View
+                      style={
+                        styles.verticalDivider
+                      }
+                    />
+                  )}
 
                   <Text
                     style={
@@ -1382,6 +1504,7 @@ export default function PetFormScreen() {
               )}
 
             </View>
+            )}
 
           </View>
 
@@ -1393,127 +1516,95 @@ export default function PetFormScreen() {
         |--------------------------------------------------------------------------
         */}
 
-        <View
-          style={
-            styles.infoTable
-          }
-        >
-
-          <InfoRow
-            label={
-              t.allergies
-            }
-            isArabic={
-              isArabic
+        {infoRows.length > 0 && (
+          <View
+            style={
+              styles.infoTable
             }
           >
 
-            {allergyList.length > 0 ? (
-
-              <View
-                style={
-                  styles.allergyContainer
-                }
+            {allergyList.length > 0 && (
+              <InfoRow
+                label={t.allergies}
+                isArabic={isArabic}
+                last={lastInfoRow === "allergies"}
               >
-
-                {allergyList.map(
-                  (
-                    allergy,
-                    index
-                  ) => (
-
-                    <View
-                      key={`${allergy}-${index}`}
-                      style={
-                        styles.allergyItem
-                      }
-                    >
-
+                <View
+                  style={
+                    styles.allergyContainer
+                  }
+                >
+                  {allergyList.map(
+                    (
+                      allergy,
+                      index
+                    ) => (
                       <View
+                        key={`${allergy}-${index}`}
                         style={
-                          styles.allergyDot
-                        }
-                      />
-
-                      <Text
-                        style={
-                          styles.infoValue
+                          styles.allergyItem
                         }
                       >
-                        {allergy}
-                      </Text>
+                        <View
+                          style={
+                            styles.allergyDot
+                          }
+                        />
 
-                    </View>
-
-                  )
-                )}
-
-              </View>
-
-            ) : (
-
-              <Text
-                style={
-                  styles.infoValue
-                }
-              >
-                {t.none}
-              </Text>
-
+                        <Text
+                          style={
+                            styles.infoValue
+                          }
+                        >
+                          {allergy}
+                        </Text>
+                      </View>
+                    )
+                  )}
+                </View>
+              </InfoRow>
             )}
 
-          </InfoRow>
+            {!!displayPreferences && (
+              <InfoRow
+                label={t.preferences}
+                isArabic={isArabic}
+                last={lastInfoRow === "preferences"}
+              >
+                <Text
+                  style={[
+                    styles.infoValue,
 
-          <InfoRow
-            label={
-              t.preferences
-            }
-            isArabic={
-              isArabic
-            }
-          >
+                    isArabic &&
+                      styles.textRtl,
+                  ]}
+                >
+                  {displayPreferences}
+                </Text>
+              </InfoRow>
+            )}
 
-            <Text
-              style={[
-                styles.infoValue,
+            {!!displayHealthNotes && (
+              <InfoRow
+                label={t.healthNotes}
+                isArabic={isArabic}
+                last={lastInfoRow === "healthNotes"}
+              >
+                <Text
+                  style={[
+                    styles.healthNotes,
 
-                isArabic &&
-                  styles.textRtl,
-              ]}
-            >
-              {
-                displayPreferences
-              }
-            </Text>
+                    isArabic &&
+                      styles.textRtl,
+                  ]}
+                >
+                  {displayHealthNotes}
+                </Text>
+              </InfoRow>
+            )}
 
-          </InfoRow>
-
-          <InfoRow
-            label={
-              t.healthNotes
-            }
-            isArabic={
-              isArabic
-            }
-            last
-          >
-
-            <Text
-              style={[
-                styles.healthNotes,
-
-                isArabic &&
-                  styles.textRtl,
-              ]}
-            >
-              {
-                displayHealthNotes
-              }
-            </Text>
-
-          </InfoRow>
-
-        </View>
+          </View>
+        )}
 
         {/*
         |--------------------------------------------------------------------------
@@ -1535,6 +1626,12 @@ export default function PetFormScreen() {
             isArabic={
               isArabic
             }
+            onPress={() =>
+              router.push({
+                pathname: "/delivery-calendar",
+                params: { animalId: String(petId) },
+              })
+            }
           />
 
           <ProfileLink
@@ -1544,6 +1641,9 @@ export default function PetFormScreen() {
             }
             isArabic={
               isArabic
+            }
+            onPress={() =>
+              router.push("/help_knowledge-base")
             }
           />
 
@@ -1555,331 +1655,209 @@ export default function PetFormScreen() {
             isArabic={
               isArabic
             }
+            onPress={() =>
+              router.push({
+                pathname: "/delivery-history",
+                params: { animalId: String(petId) },
+              })
+            }
           />
 
         </View>
 
         {/*
         |--------------------------------------------------------------------------
-        | SUBSCRIPTION CARD
+        | SUBSCRIPTION CARD (current plan of the pet)
         |--------------------------------------------------------------------------
         */}
 
         <View
           style={
-            styles.subscriptionCard
+            styles.subscriptionWrapper
           }
         >
 
-          <View
-            style={[
-              styles.subscriptionHeader,
+          {purchasesLoading && !currentPurchase ? (
 
-              isArabic &&
-                styles.rowRtl,
-            ]}
-          >
+            <ActivityIndicator
+              size="small"
+              color={COLORS.primary}
+              style={{ marginVertical: 30 }}
+            />
 
-            <Text
-              style={
-                styles.subscriptionStatusLabel
+          ) : currentPurchase ? (
+
+            <SubscriptionCard
+              purchase={currentPurchase}
+              isArabic={isArabic}
+              onOpen={() =>
+                openPurchase(currentPurchase)
               }
-            >
-              {
-                t.subscriptionStatus
+              onPlan={() =>
+                router.push({
+                  pathname: "/distribute-package",
+                  params: { id: String(currentPurchase.id) },
+                })
               }
-            </Text>
+              onUploadReceipt={() =>
+                openPurchase(currentPurchase)
+              }
+              onRenew={
+                currentPurchase.status === "pending"
+                  ? undefined
+                  : openPlans
+              }
+              onCancel={() =>
+                openPurchase(currentPurchase)
+              }
+            />
+
+          ) : (
 
             <View
-              style={[
-                styles.status,
-
-                isArabic &&
-                  styles.rowRtl,
-              ]}
+              style={
+                styles.subscriptionCard
+              }
             >
 
-              <View
+              <Text
                 style={[
-                  styles.statusDot,
+                  styles.subscriptionStatusLabel,
 
-                  !active &&
-                    styles.statusDotInactive,
+                  isArabic &&
+                    styles.textRtl,
                 ]}
-              />
+              >
+                {t.subscriptionStatus}
+              </Text>
 
               <Text
-                style={
-                  styles.statusText
-                }
+                style={[
+                  styles.subscriptionTitle,
+
+                  isArabic &&
+                    styles.textRtl,
+                ]}
               >
-                {
-                  active
-                    ? t.active
-                    : t.inactive
-                }
+                {t.noPlanTitle}
               </Text>
+
+              <Text
+                style={[
+                  styles.cycleText,
+                  { marginTop: 10 },
+
+                  isArabic &&
+                    styles.textRtl,
+                ]}
+              >
+                {t.noPlanText}
+              </Text>
+
+              <Pressable
+                style={[
+                  styles.renewButton,
+                  { marginTop: 24 },
+
+                  isArabic &&
+                    styles.rowRtl,
+                ]}
+                onPress={openPlans}
+              >
+
+                <MaterialCommunityIcons
+                  name="creation-outline"
+                  size={24}
+                  color="#FFFFFF"
+                />
+
+                <Text
+                  style={
+                    styles.renewButtonText
+                  }
+                >
+                  {t.choosePlan}
+                </Text>
+
+              </Pressable>
 
             </View>
 
-          </View>
+          )}
 
-          <Text
-            style={[
-              styles.subscriptionTitle,
+          {/*
+           * Other plans of this pet (previous / waiting ones)
+           */}
 
-              isArabic &&
-                styles.textRtl,
-            ]}
-          >
-            {
-              subscriptionTitle
-            }
-          </Text>
-
-          <View
-            style={[
-              styles.subscriptionStats,
-
-              isArabic &&
-                styles.rowRtl,
-            ]}
-          >
+          {purchases.filter(
+            purchase =>
+              purchase.id !== currentPurchase?.id
+          ).length > 0 && (
 
             <View
               style={
-                styles.statColumn
+                styles.otherPlans
               }
             >
 
               <Text
-                style={
-                  styles.statLabel
-                }
+                style={[
+                  styles.otherPlansTitle,
+
+                  isArabic &&
+                    styles.textRtl,
+                ]}
               >
-                {t.packageSize}
+                {t.planHistory}
               </Text>
 
-              <View
-                style={
-                  styles.statValueRow
-                }
-              >
+              {purchases
+                .filter(
+                  purchase =>
+                    purchase.id !== currentPurchase?.id
+                )
+                .map(purchase => (
 
-                <Text
-                  style={
-                    styles.statValue
-                  }
-                >
-                  {packageSize}
-                </Text>
+                  <Pressable
+                    key={purchase.id}
+                    onPress={() =>
+                      openPurchase(purchase)
+                    }
+                    style={[
+                      styles.otherPlanRow,
 
-                <Text
-                  style={
-                    styles.statSuffix
-                  }
-                >
-                  {t.meals}
-                </Text>
+                      isArabic &&
+                        styles.rowRtl,
+                    ]}
+                  >
 
-              </View>
+                    <Text
+                      style={[
+                        styles.otherPlanName,
+
+                        isArabic &&
+                          styles.textRtl,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {purchase.product.name}
+                    </Text>
+
+                    <Text
+                      style={
+                        styles.otherPlanStatus
+                      }
+                    >
+                      {purchase.status_label}
+                    </Text>
+
+                  </Pressable>
+
+                ))}
 
             </View>
 
-            <View
-              style={
-                styles.statSeparator
-              }
-            />
-
-            <View
-              style={
-                styles.statColumn
-              }
-            >
-
-              <Text
-                style={
-                  styles.statLabel
-                }
-              >
-                {t.priceCycle}
-              </Text>
-
-              <View
-                style={
-                  styles.statValueRow
-                }
-              >
-
-                <Text
-                  style={
-                    styles.statValue
-                  }
-                >
-                  {price}
-                </Text>
-
-                <Text
-                  style={
-                    styles.statSuffix
-                  }
-                >
-                  {currency}
-                </Text>
-
-              </View>
-
-            </View>
-
-          </View>
-
-          <View
-            style={
-              styles.subscriptionDivider
-            }
-          />
-
-          <Text
-            style={
-              styles.cycleText
-            }
-          >
-            {t.cycleStarted}{" "}
-
-            <Text
-              style={
-                styles.cycleStrong
-              }
-            >
-              {cycleStarted}
-            </Text>
-          </Text>
-
-          <Text
-            style={
-              styles.cycleText
-            }
-          >
-            {t.nextRenewal}{" "}
-
-            <Text
-              style={
-                styles.cycleStrong
-              }
-            >
-              {nextRenewal}
-            </Text>
-          </Text>
-
-          <Pressable
-            style={
-              styles.editSubscriptionButton
-            }
-          >
-
-            <Ionicons
-              name="pencil-outline"
-              size={22}
-              color={
-                COLORS.text
-              }
-            />
-
-            <Text
-              style={
-                styles.editSubscriptionText
-              }
-            >
-              {
-                t.editSubscription
-              }
-            </Text>
-
-          </Pressable>
-
-          <Pressable
-            style={
-              styles.renewButton
-            }
-          >
-
-            <MaterialCommunityIcons
-              name="creation-outline"
-              size={24}
-              color="#FFFFFF"
-            />
-
-            <Text
-              style={
-                styles.renewButtonText
-              }
-            >
-              {
-                t.renewSubscription
-              }
-            </Text>
-
-          </Pressable>
-
-          <View
-            style={[
-              styles.planActions,
-
-              isArabic &&
-                styles.rowRtl,
-            ]}
-          >
-
-            <Pressable
-              style={
-                styles.planAction
-              }
-            >
-
-              <Ionicons
-                name="time-outline"
-                size={21}
-                color={
-                  COLORS.primary
-                }
-              />
-
-              <Text
-                style={
-                  styles.planActionText
-                }
-              >
-                {t.pausePlan}
-              </Text>
-
-            </Pressable>
-
-            <Pressable
-              style={
-                styles.planAction
-              }
-            >
-
-              <Ionicons
-                name="close"
-                size={23}
-                color={
-                  COLORS.danger
-                }
-              />
-
-              <Text
-                style={
-                  styles.planActionText
-                }
-              >
-                {t.cancelPlan}
-              </Text>
-
-            </Pressable>
-
-          </View>
+          )}
 
         </View>
 
@@ -2231,6 +2209,10 @@ function EditProfileModal({
                       if (value !== "Dog") {
                         setBreedSize("");
                       }
+                      // Kitten <-> Puppy: clear an age that does not exist for the new species
+                      if (ageYears && !AGE_VALUES[value].includes(ageYears)) {
+                        setAgeYears("");
+                      }
                     }}
                   />
 
@@ -2331,20 +2313,12 @@ function EditProfileModal({
                     }
                   />
 
-                  <TextInput
-                    value={
-                      ageYears
-                    }
-                    onChangeText={
-                      setAgeYears
-                    }
-                    keyboardType="decimal-pad"
-                    style={[
-                      styles.modalInput,
-
-                      isArabic &&
-                        styles.inputRtl,
-                    ]}
+                  <SimpleSelect
+                    value={ageYears}
+                    rtl={isArabic}
+                    placeholder={t.select}
+                    options={ageOptionsFor(species, t)}
+                    onChange={setAgeYears}
                   />
 
                 </View>
@@ -2635,7 +2609,9 @@ function ProfileLink({
   icon,
   customIcon,
   isArabic,
+  onPress,
 }: {
+  onPress?: () => void;
   title: string;
   icon?: React.ComponentProps<
     typeof Ionicons
@@ -2649,6 +2625,7 @@ function ProfileLink({
   return (
 
     <Pressable
+      onPress={onPress}
       style={[
         styles.profileLink,
 
@@ -3245,8 +3222,67 @@ const styles =
     |--------------------------------------------------------------------------
     */
 
-    subscriptionCard: {
+    subscriptionWrapper: {
       marginTop: 41,
+    },
+
+    otherPlans: {
+      marginTop: 24,
+    },
+
+    otherPlansTitle: {
+      fontFamily:
+        "Cairo_700Bold",
+
+      fontSize: 13,
+
+      color:
+        COLORS.muted,
+
+      marginBottom: 6,
+    },
+
+    otherPlanRow: {
+      flexDirection: "row",
+
+      alignItems: "center",
+
+      justifyContent:
+        "space-between",
+
+      gap: 12,
+
+      minHeight: 50,
+
+      borderBottomWidth: 1,
+
+      borderBottomColor:
+        COLORS.border,
+    },
+
+    otherPlanName: {
+      flex: 1,
+
+      fontFamily:
+        "Cairo_500Medium",
+
+      fontSize: 14,
+
+      color:
+        COLORS.text,
+    },
+
+    otherPlanStatus: {
+      fontFamily:
+        "Cairo_400Regular",
+
+      fontSize: 12,
+
+      color:
+        COLORS.muted,
+    },
+
+    subscriptionCard: {
 
       borderTopWidth: 3,
 
