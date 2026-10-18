@@ -10,6 +10,7 @@ import type { Pet, } from "../../types/customer";
 import { fetchPurchases, } from "../../services/purchaseApi";
 import type { PurchaseSummary, } from "../../types/purchase";
 import { formatDate, } from "../../components/purchase/purchaseUtils";
+import GuestGate from "../../components/shop/GuestGate";
 const COLORS = {
     background: "#F4F1EC",
     primary: "#249B97",
@@ -30,7 +31,7 @@ type ExtendedPet = Pet & {
 };
 export default function PetsScreen() {
     const { isArabic, } = useAppLanguage();
-    const { subscription, loading, error, refresh, } = useCustomerData();
+    const { subscription, loading, error, refresh, isGuest, } = useCustomerData();
     const { width, } = useWindowDimensions();
     const isCompact = width < 460;
     const [viewMode, setViewMode,] = useState<ViewMode>("list");
@@ -171,6 +172,10 @@ export default function PetsScreen() {
             },
         ]);
     };
+    // Visitor: My Pets needs an account
+    if (isGuest && !loading) {
+        return <GuestGate redirect="/(tabs)/pets"/>;
+    }
     if (loading &&
         pets.length === 0) {
         return (<SafeAreaView edges={[
@@ -1264,3 +1269,4 @@ const styles = StyleSheet.create({
         writingDirection: "rtl",
     },
 });
+

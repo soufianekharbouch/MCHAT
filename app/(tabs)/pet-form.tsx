@@ -267,6 +267,7 @@ export default function PetFormScreen() {
         unknown: "غير محدد",
         none: "لا يوجد",
 
+        speciesLocked: "لا يمكن تغيير النوع لأن لهذا الحيوان اشتراكاً.",
         noPlanTitle: "لا توجد باقة نشطة",
         noPlanText: "اختر باقة وجبات طازجة لهذا الحيوان، ثم حدد مواعيد التوصيل.",
         choosePlan: "اختيار باقة",
@@ -362,6 +363,7 @@ export default function PetFormScreen() {
         unknown: "Not specified",
         none: "None",
 
+        speciesLocked: "The species can't be changed because this pet has a subscription.",
         noPlanTitle: "No active plan",
         noPlanText: "Choose a fresh meal plan for this pet, then pick your delivery dates.",
         choosePlan: "Choose a plan",
@@ -475,6 +477,22 @@ export default function PetFormScreen() {
       ) ?? null;
 
     }, [purchases]);
+
+  /*
+   * Pet with a subscription (a plan bought, even finished, or an old
+   * back-office subscription): the species Cat / Dog can't change anymore
+   * (recipes and deliveries depend on it).
+   */
+  const speciesLocked =
+    isEditing &&
+    (
+      purchases.some(
+        purchase =>
+          purchase.status !== "cancelled" &&
+          purchase.status !== "refunded"
+      ) ||
+      !!existingPet?.next_order
+    );
 
   const openPlans = () =>
     router.push({
@@ -947,7 +965,11 @@ export default function PetFormScreen() {
 
         const payload = {
           name: name.trim(),
-          species,
+          // Locked: the saved species is always sent back unchanged
+          species:
+            speciesLocked && existingPet
+              ? (existingPet.species === "Dog" ? "Dog" : "Cat")
+              : species,
           breed_size_category: species === "Dog" ? breedSize || null : null,
           age: ageYears.trim() || null,
           health_status: existingPet?.health_status || null,
@@ -1881,6 +1903,7 @@ export default function PetFormScreen() {
           isArabic
         }
         isEditing={true}
+        speciesLocked={speciesLocked}
         species={species}
         setSpecies={setSpecies}
         breedSize={breedSize}
@@ -1960,6 +1983,7 @@ function EditProfileModal({
   t,
   isArabic,
   isEditing,
+  speciesLocked = false,
   existingPet,
   species,
   setSpecies,
@@ -2196,6 +2220,33 @@ function EditProfileModal({
               {true && (
                 <>
                   <FormLabel text={t.species} rtl={isArabic} />
+                  {speciesLocked ? (
+                    <View
+                      style={[
+                        styles.lockedField,
+                        isArabic && styles.rowRtl,
+                      ]}
+                    >
+                      <MaterialCommunityIcons
+                        name={species === "Dog" ? "dog" : "cat"}
+                        size={22}
+                        color={COLORS.primary}
+                      />
+                      <Text
+                        style={[
+                          styles.lockedFieldText,
+                          isArabic && styles.textRtl,
+                        ]}
+                      >
+                        {species === "Dog" ? t.dog : t.cat}
+                      </Text>
+                      <Ionicons
+                        name="lock-closed"
+                        size={18}
+                        color={COLORS.muted}
+                      />
+                    </View>
+                  ) : (
                   <SimpleSelect
                     value={species}
                     rtl={isArabic}
@@ -2215,6 +2266,18 @@ function EditProfileModal({
                       }
                     }}
                   />
+                  )}
+
+                  {speciesLocked && (
+                    <Text
+                      style={[
+                        styles.lockedHint,
+                        isArabic && styles.textRtl,
+                      ]}
+                    >
+                      {t.speciesLocked}
+                    </Text>
+                  )}
 
                   {species === "Dog" && (
                     <>
@@ -2882,6 +2945,36 @@ function SimpleSelect({
 
 const styles =
   StyleSheet.create({
+
+  /*
+   * Species locked (pet with a subscription)
+   */
+  lockedField: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    minHeight: 54,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 8,
+    backgroundColor: COLORS.card,
+  },
+  lockedFieldText: {
+    flex: 1,
+    fontSize: 15,
+    fontFamily: "Cairo_600SemiBold",
+    color: COLORS.text,
+  },
+  lockedHint: {
+    marginTop: 6,
+    marginBottom: 4,
+    fontSize: 12,
+    lineHeight: 18,
+    fontFamily: "Cairo_400Regular",
+    color: COLORS.muted,
+  },
+
 
     topSafeArea: {
       backgroundColor: "#000000",

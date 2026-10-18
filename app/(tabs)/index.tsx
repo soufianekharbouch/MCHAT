@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -18,15 +18,29 @@ import {
 } from '@expo/vector-icons';
 import {
   router,
+  useFocusEffect,
 } from 'expo-router';
-import * as SecureStore
-  from 'expo-secure-store';
+import { getStoredItem } from '../../services/storage';
 import {
   useAppLanguage,
 } from '../../context/LanguageContext';
 import {
   useCustomerData,
 } from '../../context/CustomerDataContext';
+import {
+  fetchProducts,
+  fetchPurchases,
+} from '../../services/purchaseApi';
+import type {
+  CatalogAnimal,
+  Product,
+  PurchaseSummary,
+} from '../../types/purchase';
+import TrialOfferCard from '../../components/purchase/TrialOfferCard';
+import {
+  formatDate,
+} from '../../components/purchase/purchaseUtils';
+import ShopCatalog from "../../components/shop/ShopCatalog";
 const COLORS = {
   background: '#F7F4EF',
   primary: '#249B97',
@@ -40,6 +54,7 @@ const COLORS = {
   danger: '#B42318',
   dark: '#292929',
 };
+
 export default function HomeScreen() {
   const [
     passwordGuardReady,
@@ -51,7 +66,7 @@ export default function HomeScreen() {
       async () => {
         try {
           const mustChangePassword =
-            await SecureStore.getItemAsync(
+            await getStoredItem(
               'must_change_password'
             );
           if (
@@ -88,7 +103,142 @@ export default function HomeScreen() {
     loading,
     error,
     refresh,
+    isGuest,
   } = useCustomerData();
+
+  /*
+   * Packs (purchases) of all pets: status, next delivery
+   * and "Choose a plan" button of each pet card.
+   */
+  const [
+    purchases,
+    setPurchases,
+  ] = useState<PurchaseSummary[]>([]);
+  const loadPurchases =
+    useCallback(async () => {
+      if (isGuest) {
+        setPurchases([]);
+        return;
+      }
+      try {
+        setPurchases(
+          await fetchPurchases(
+            isArabic ? 'ar' : 'en'
+          )
+        );
+      } catch (purchaseError) {
+        console.error(
+          'Unable to load purchases:',
+          purchaseError
+        );
+      }
+    }, [isArabic, isGuest]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadPurchases();
+    }, [loadPurchases])
+  );
+  /*
+   * Saved addresses (label of the delivery address).
+   */
+  const [
+    addresses,
+    setAddresses,
+  ] = useState<any[]>([]);
+  const loadAddresses =
+    useCallback(async () => {
+      try {
+        const token =
+          await getStoredItem(
+            'access_token'
+          );
+        if (!token) {
+          return;
+        }
+        const response = await fetch(
+          'https://animal-care2.kharbouch-soufiane.com/api/mobile/settings/addresses',
+          {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              access_token: token,
+              lang: isArabic ? 'ar' : 'en',
+            }),
+          }
+        );
+        const data = await response.json();
+        if (
+          response.ok &&
+          Array.isArray(data?.addresses)
+        ) {
+          setAddresses(data.addresses);
+        }
+      } catch (addressError) {
+        console.error(
+          'Unable to load addresses:',
+          addressError
+        );
+      }
+    }, [isArabic]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadAddresses();
+    }, [loadAddresses])
+  );
+  /*
+   * Trial offers: pets with a trial pack still running
+   * + packs with a "price during trial" (same API as the plans page).
+   */
+  const [
+    catalog,
+    setCatalog,
+  ] = useState<CatalogAnimal[]>([]);
+  const loadCatalog =
+    useCallback(async () => {
+      if (isGuest) {
+        setCatalog([]);
+        return;
+      }
+      try {
+        const data = await fetchProducts(
+          isArabic ? 'ar' : 'en'
+        );
+        setCatalog(data.animals || []);
+      } catch (catalogError) {
+        console.error(
+          'Unable to load trial offers:',
+          catalogError
+        );
+      }
+    }, [isArabic, isGuest]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadCatalog();
+    }, [loadCatalog])
+  );
+  const trialOffers = useMemo(
+    () =>
+      catalog
+        .filter(animal => !!animal.trial)
+        .map(animal => ({
+          animal,
+          offers: animal.products
+            .filter((product: Product) => product.trial_offer?.active && product.can_purchase)
+            .sort((a: Product, b: Product) => b.discount_percent - a.discount_percent),
+        }))
+        .filter(item => item.offers.length > 0),
+    [catalog]
+  );
+  const refreshAll = () => {
+    void refresh();
+    void loadPurchases();
+    void loadAddresses();
+    void loadCatalog();
+  };
   const t = isArabic
     ? {
         welcomeBack: 'مرحباً بعودتك،',
@@ -107,15 +257,28 @@ export default function HomeScreen() {
         upcomingDelivery: 'التوصيل الطازج القادم',
         meals: 'وجبات',
         expectedWindow: 'الوقت المتوقع:',
-        homeVilla: 'المنزل (فيلا)',
+        deliveryAddressLabel: 'عنوان التوصيل',
         editCutoff: 'آخر وقت للتعديل:',
-        awaiting: '(بانتظار التأكيد النهائي)',
+        awaiting: '(لا يزال بإمكانك التعديل)',
+        cutoffPassed: '(انتهت مهلة التعديل)',
+        at: 'الساعة',
+        sixPm: '6:00 مساءً',
+        fullAddress: 'العنوان الكامل',
+        notes: 'ملاحظات',
+        deliveryTime: 'وقت التوصيل',
         manageDelivery: 'إدارة التوصيل',
         skipDate: 'تخطي التاريخ',
         yourPets: 'حيواناتك الأليفة',
+        noPetsTitle: 'لا توجد حيوانات أليفة بعد',
+        noPetsText: 'أضف حيوانك الأليف لاختيار باقة وجباته الطازجة.',
+        addNewPet: 'إضافة حيوان أليف جديد',
         viewDetails: 'عرض التفاصيل',
         active: 'نشط',
-        noSubscription: 'لا يوجد اشتراك',
+        noSubscription: 'لا يوجد اشتراك نشط',
+        pendingPayment: 'بانتظار الدفع',
+        choosePlan: 'اختيار باقة',
+        planDeliveries: 'جدولة التوصيل',
+        viewOrder: 'عرض الطلب',
         nextFreshDelivery: 'التوصيل الطازج القادم:',
         noScheduledMeals: 'لا توجد وجبات مجدولة',
         transitionEyebrow:
@@ -155,15 +318,28 @@ export default function HomeScreen() {
         upcomingDelivery: 'UPCOMING FRESH DELIVERY',
         meals: 'meals',
         expectedWindow: 'Expected Window:',
-        homeVilla: 'Home (Villa)',
+        deliveryAddressLabel: 'Delivery address',
         editCutoff: 'Edit cutoff:',
-        awaiting: '(Awaiting final confirmation)',
+        awaiting: '(you can still edit)',
+        cutoffPassed: '(editing closed)',
+        at: 'at',
+        sixPm: '6:00 PM',
+        fullAddress: 'Full address',
+        notes: 'Notes',
+        deliveryTime: 'Delivery time',
         manageDelivery: 'Manage Delivery',
         skipDate: 'Skip Date',
         yourPets: 'Your Pets',
+        noPetsTitle: 'No pets yet',
+        noPetsText: 'Add your pet to choose their fresh meal plan.',
+        addNewPet: 'Add New Pet',
         viewDetails: 'View Details',
         active: 'Active',
-        noSubscription: 'No Subscription',
+        noSubscription: 'No active plan',
+        pendingPayment: 'Awaiting payment',
+        choosePlan: 'Choose a plan',
+        planDeliveries: 'Plan deliveries',
+        viewOrder: 'View order',
         nextFreshDelivery: 'Next fresh delivery:',
         noScheduledMeals: 'No scheduled meals',
         transitionEyebrow:
@@ -265,15 +441,141 @@ export default function HomeScreen() {
         0
       );
     }, [nextOrder]);
+  /*
+   * Address of the next delivery:
+   *  1. address object sent with the order (label, address...)
+   *  2. saved address with the same id as the order
+   *  3. default saved address
+   *  4. old subscription address (text)
+   */
+  const orderAddress =
+    (nextOrder as any)?.address ??
+    (nextOrder as any)?.delivery_address ??
+    null;
+  const orderAddressId =
+    (nextOrder as any)?.customer_address_id ??
+    (nextOrder as any)?.address_id ??
+    (typeof orderAddress === 'object'
+      ? orderAddress?.id
+      : null) ??
+    null;
+  const savedAddress =
+    (orderAddressId
+      ? addresses.find(
+          (address: any) =>
+            Number(address.id) ===
+            Number(orderAddressId)
+        )
+      : null) ??
+    addresses.find(
+      (address: any) =>
+        Boolean(address.is_default)
+    ) ??
+    addresses[0] ??
+    null;
+  const addressSource =
+    orderAddress &&
+    typeof orderAddress === 'object'
+      ? orderAddress
+      : savedAddress;
+  const deliveryAddressTitle =
+    addressSource?.label ||
+    (nextOrder as any)?.address_label ||
+    t.deliveryAddressLabel;
   const deliveryAddress =
-    (nextOrder as any)?.address ||
-    (nextOrder as any)?.delivery_address ||
-    (subscription as any)?.subscriber_address ||
-    '';
-  const deliveryWindow =
+    addressSource
+      ? [
+          addressSource.address,
+          addressSource.zone_label ??
+            addressSource.city,
+          addressSource.province_label ??
+            addressSource.province,
+        ]
+          .filter(
+            (value: any) =>
+              typeof value === 'string' &&
+              value.trim()
+          )
+          .join(isArabic ? '، ' : ', ')
+      : typeof orderAddress === 'string'
+        ? orderAddress
+        : (subscription as any)?.subscriber_address ||
+          '';
+  /*
+   * Expected window = delivery slot of the address
+   * ("09:00-12:00" -> "09:00 - 12:00").
+   */
+  const deliveryWindow = String(
+    addressSource?.delivery_slot ||
+    (nextOrder as any)?.delivery_slot ||
     (nextOrder as any)?.delivery_window ||
     (nextOrder as any)?.time_slot ||
-    '';
+    ''
+  ).replace('-', ' - ');
+
+  /*
+   * Edit cutoff = 18:00 the day before the delivery.
+   */
+  const cutoffDate = useMemo(() => {
+    const value = (nextOrder as any)?.scheduled_for;
+    if (!value) {
+      return null;
+    }
+    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
+    if (!match) {
+      return null;
+    }
+    return new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]) - 1,
+      18,
+      0,
+      0
+    );
+  }, [nextOrder]);
+  const cutoffPassed =
+    !!cutoffDate &&
+    Date.now() >= cutoffDate.getTime();
+  const cutoffLabel = cutoffDate
+    ? `${new Intl.DateTimeFormat(
+        isArabic ? 'ar' : 'en',
+        {
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric',
+        }
+      ).format(cutoffDate)} ${t.at} ${t.sixPm}`
+    : '—';
+
+  /*
+   * Info bubble with the full address (tap on the label).
+   */
+  const [
+    addressInfoVisible,
+    setAddressInfoVisible,
+  ] = useState(false);
+  const fullAddressLines = addressSource
+    ? [
+        addressSource.address,
+        addressSource.zone_label ??
+          addressSource.city,
+        addressSource.province_label ??
+          addressSource.province,
+        addressSource.postal_code,
+        addressSource.country,
+      ].filter(
+        (value: any) =>
+          typeof value === 'string' &&
+          value.trim()
+      )
+    : deliveryAddress
+      ? [String(deliveryAddress)]
+      : [];
+  const addressNote =
+    typeof addressSource?.note === 'string'
+      ? addressSource.note.trim()
+      : '';
   const formatShortDate = (
     value?: string | null
   ) => {
@@ -305,28 +607,86 @@ export default function HomeScreen() {
   ) => {
     return value || t.noScheduledMeals;
   };
-  const petNextDate = (
+  /*
+   * Best plan of a pet: active/paid first, then pending.
+   */
+  const planFor = (
     pet: any
-  ) => {
+  ): PurchaseSummary | null => {
+    const ofPet = purchases.filter(
+      purchase =>
+        Number(purchase.animal?.id) ===
+        Number(pet?.id)
+    );
     return (
-      pet?.next_order?.scheduled_for ||
-      pet?.orders?.find(
-        (order: any) =>
-          order?.dashboard_status ===
-            'planned' ||
-          order?.dashboard_status ===
-            'prepared'
-      )?.scheduled_for ||
+      ofPet.find(purchase => purchase.is_active) ??
+      ofPet.find(purchase => purchase.status === 'pending') ??
       null
     );
   };
+  /*
+   * Old back-office subscription: "active" only if the pet
+   * still has an upcoming planned order.
+   */
+  const legacyNextDate = (
+    pet: any
+  ): string | null =>
+    pet?.subscription_status === 'active'
+      ? pet?.next_order?.scheduled_for ||
+        pet?.orders?.find(
+          (order: any) =>
+            order?.dashboard_status ===
+              'planned' ||
+            order?.dashboard_status ===
+              'prepared'
+        )?.scheduled_for ||
+        null
+      : null;
   const petIsActive = (
     pet: any
   ) =>
-    pet?.subscription_status ===
-      'active';
+    !!planFor(pet)?.is_active ||
+    !!legacyNextDate(pet);
+  const petIsPending = (
+    pet: any
+  ) =>
+    !petIsActive(pet) &&
+    planFor(pet)?.status === 'pending';
+  const petNextDate = (
+    pet: any
+  ): string | null => {
+    const date =
+      planFor(pet)?.next_delivery?.date ||
+      legacyNextDate(pet);
+    return date
+      ? formatDate(date, isArabic)
+      : null;
+  };
+  const openPlans = (
+    pet: any
+  ) => {
+    router.push({
+      pathname: '/plans',
+      params: {
+        animalId: String(pet.id),
+      },
+    } as any);
+  };
+  const openOrder = (
+    purchase: PurchaseSummary
+  ) => {
+    router.push({
+      pathname: '/purchase',
+      params: {
+        id: String(purchase.id),
+      },
+    } as any);
+  };
   const openPets = () => {
     router.push('/pets' as any);
+  };
+  const openAddPet = () => {
+    router.push('/pet-form' as any);
   };
   const openNotifications = () => {
     router.push('/notifications' as any);
@@ -344,6 +704,210 @@ export default function HomeScreen() {
       },
     } as any);
   };
+  /*
+   * 1 or 2 pets: cards share the screen width.
+   * 3 pets or more: horizontal scrolling.
+   */
+  const fitPets =
+    pets.length > 0 &&
+    pets.length <= 2;
+  const renderPetCard = (pet: any) => {
+    const active = petIsActive(pet);
+    const pending = petIsPending(pet);
+    const plan = planFor(pet);
+    const date = petNextDate(pet);
+
+    // One pet: photo (50%) + info side by side, button full width below
+    const single = pets.length === 1;
+
+    const isDog =
+      String(pet.species || '').toLowerCase() === 'dog';
+
+    const onPlanPress = () => {
+      if (active && plan) {
+        router.push({
+          pathname: '/distribute-package',
+          params: { id: String(plan.id) },
+        } as any);
+      } else if (pending && plan) {
+        openOrder(plan);
+      } else {
+        openPlans(pet);
+      }
+    };
+
+    const photo = (
+      <View
+        style={[
+          styles.petImage,
+          fitPets && styles.petImageFit,
+          single && styles.petImageSingle,
+        ]}
+      >
+        {pet.photo_url ? (
+          <Image
+            source={{ uri: pet.photo_url }}
+            style={styles.fillImage}
+          />
+        ) : (
+          <MaterialCommunityIcons
+            name={isDog ? 'dog' : 'cat'}
+            size={single ? 56 : 46}
+            color={COLORS.primary}
+          />
+        )}
+      </View>
+    );
+
+    const info = (
+      <View style={single ? styles.petInfoSingle : null}>
+        <Text
+          numberOfLines={1}
+          style={[
+            styles.petName,
+            single && styles.petNameSingle,
+            single && isArabic && styles.textRtl,
+          ]}
+        >
+          {pet.name}
+        </Text>
+
+        <View
+          style={[
+            styles.petStatusRow,
+            single && isArabic && styles.rowRtl,
+          ]}
+        >
+          <View
+            style={[
+              styles.petStatusDot,
+              !active && styles.petStatusDotOff,
+              pending && styles.petStatusDotPending,
+            ]}
+          />
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.petStatusText,
+              single && styles.petStatusTextSingle,
+            ]}
+          >
+            {active
+              ? t.active
+              : pending
+                ? t.pendingPayment
+                : t.noSubscription}
+          </Text>
+        </View>
+
+        {!!date && (
+          <>
+            <Text
+              style={[
+                styles.petNextLabel,
+                single && isArabic && styles.textRtl,
+              ]}
+            >
+              {t.nextFreshDelivery}
+            </Text>
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.petNextDate,
+                single && styles.petNextDateSingle,
+                single && isArabic && styles.textRtl,
+              ]}
+            >
+              {date}
+            </Text>
+          </>
+        )}
+      </View>
+    );
+
+    /*
+     * No next delivery:
+     *  - no plan       -> Choose a plan (plans page)
+     *  - pending plan  -> View order (payment)
+     *  - active plan   -> Plan deliveries
+     */
+    const planButton = !date ? (
+      <Pressable
+        onPress={onPlanPress}
+        style={({ pressed }) => [
+          styles.choosePlanButton,
+          single && styles.choosePlanButtonSingle,
+          single && isArabic && styles.rowRtl,
+          pending && styles.choosePlanButtonPending,
+          pressed && styles.addPetButtonPressed,
+        ]}
+      >
+        <MaterialCommunityIcons
+          name={
+            pending
+              ? 'receipt-text-outline'
+              : active
+                ? 'calendar-check-outline'
+                : 'creation'
+          }
+          size={single ? 24 : 22}
+          color="#FFFFFF"
+        />
+        <Text
+          numberOfLines={2}
+          style={[
+            styles.choosePlanText,
+            single && styles.choosePlanTextSingle,
+          ]}
+        >
+          {pending
+            ? t.viewOrder
+            : active
+              ? t.planDeliveries
+              : t.choosePlan}
+        </Text>
+      </Pressable>
+    ) : null;
+
+    return (
+      <Pressable
+        key={String(pet.id)}
+        style={[
+          styles.petCard,
+          fitPets && styles.petCardFit,
+        ]}
+        onPress={() => openPet(pet)}
+      >
+        {single ? (
+          <View
+            style={[
+              styles.petSingleRow,
+              isArabic && styles.rowRtl,
+            ]}
+          >
+            {photo}
+            {info}
+          </View>
+        ) : (
+          <>
+            {photo}
+            {info}
+          </>
+        )}
+
+        {planButton}
+      </Pressable>
+    );
+  };
+
+  /*
+   * Visitor: the Home tab shows the shop catalog.
+   * Signed in: the normal Home.
+   */
+  if (isGuest && !loading) {
+    return <ShopCatalog />;
+  }
+
   if (
     !passwordGuardReady ||
     (loading && !subscription)
@@ -385,7 +949,7 @@ export default function HomeScreen() {
         refreshControl={
           <RefreshControl
             refreshing={loading}
-            onRefresh={refresh}
+            onRefresh={refreshAll}
             tintColor={
               COLORS.primary
             }
@@ -440,101 +1004,24 @@ export default function HomeScreen() {
             </Text>
           </View>
         )}
-        <View
-          style={styles.tasteCard}
-        >
-          <View
-            style={[
-              styles.tasteTop,
-              isArabic &&
-                styles.rowRtl,
-            ]}
-          >
-            <Text
-              style={styles.eyebrow}
-            >
-              {t.tasteLabel}
-            </Text>
-            <Text
-              style={styles.price}
-            >
-              KW 49
-            </Text>
-          </View>
-          <Text
-            style={[
-              styles.tasteTitle,
-              isArabic &&
-                styles.textRtl,
-            ]}
-          >
-            {t.tasteTitle}
-          </Text>
-          <Text
-            style={[
-              styles.tasteDescription,
-              isArabic &&
-                styles.textRtl,
-            ]}
-          >
-            {t.tasteDescription}
-          </Text>
-          <View
-            style={[
-              styles.countdownHeader,
-              isArabic &&
-                styles.rowRtl,
-            ]}
-          >
-            <Text
-              style={styles.countdownLabel}
-            >
-              {t.offerEnds}
-            </Text>
-            <Text
-              style={styles.previewText}
-            >
-              {t.previewCountdown}
-            </Text>
-          </View>
-          <View
-            style={[
-              styles.countdownRow,
-              isArabic &&
-                styles.rowRtl,
-            ]}
-          >
-            <CountdownBox
-              value="01"
-              label={t.days}
-            />
-            <CountdownBox
-              value="21"
-              label={t.hours}
-            />
-            <CountdownBox
-              value="23"
-              label={t.mins}
-            />
-            <CountdownBox
-              value="07"
-              label={t.secs}
-            />
-          </View>
-          <Pressable
-            style={
-              styles.tasteButton
+        {/*
+         * TRIAL OFFER: live countdown until the end of the pet's trial
+         */}
+        {trialOffers.map(({ animal, offers }) => (
+          <TrialOfferCard
+            key={animal.id}
+            animal={animal}
+            offers={offers}
+            isArabic={isArabic}
+            onOpen={() =>
+              router.push({
+                pathname: '/plans',
+                params: { animalId: String(animal.id) },
+              } as any)
             }
-          >
-            <Text
-              style={
-                styles.tasteButtonText
-              }
-            >
-              {t.tasteButton}
-            </Text>
-          </Pressable>
-        </View>
+            onExpired={() => void loadCatalog()}
+          />
+        ))}
         {nextOrder && (
           <View
             style={
@@ -660,17 +1147,40 @@ export default function HomeScreen() {
                 }
               />
               <View style={styles.flex}>
-                <Text
+                <Pressable
+                  onPress={() =>
+                    setAddressInfoVisible(
+                      value => !value
+                    )
+                  }
+                  hitSlop={8}
                   style={[
-                    styles.addressTitle,
+                    styles.addressTitleRow,
                     isArabic &&
-                      styles.textRtl,
+                      styles.rowRtl,
                   ]}
                 >
-                  {t.homeVilla}
-                </Text>
-                {!!deliveryAddress && (
                   <Text
+                    style={[
+                      styles.addressTitle,
+                      styles.addressTitleLink,
+                    ]}
+                  >
+                    {deliveryAddressTitle}
+                  </Text>
+                  <Ionicons
+                    name={
+                      addressInfoVisible
+                        ? 'information-circle'
+                        : 'information-circle-outline'
+                    }
+                    size={17}
+                    color={COLORS.primary}
+                  />
+                </Pressable>
+                {!!deliveryAddress && !addressInfoVisible && (
+                  <Text
+                    numberOfLines={1}
                     style={[
                       styles.addressText,
                       isArabic &&
@@ -681,6 +1191,90 @@ export default function HomeScreen() {
                       deliveryAddress
                     )}
                   </Text>
+                )}
+                {addressInfoVisible && (
+                  <View
+                    style={[
+                      styles.addressBubble,
+                      isArabic &&
+                        styles.addressBubbleRtl,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.addressBubbleArrow,
+                        isArabic &&
+                          styles.addressBubbleArrowRtl,
+                      ]}
+                    />
+                    <View
+                      style={[
+                        styles.addressBubbleHeader,
+                        isArabic &&
+                          styles.rowRtl,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.addressBubbleTitle,
+                          isArabic &&
+                            styles.textRtl,
+                        ]}
+                      >
+                        {t.fullAddress}
+                      </Text>
+                      <Pressable
+                        onPress={() =>
+                          setAddressInfoVisible(false)
+                        }
+                        hitSlop={10}
+                      >
+                        <Ionicons
+                          name="close"
+                          size={18}
+                          color={COLORS.muted}
+                        />
+                      </Pressable>
+                    </View>
+                    {fullAddressLines.map(
+                      (line: string, index: number) => (
+                        <Text
+                          key={index}
+                          style={[
+                            styles.addressBubbleText,
+                            index === 0 &&
+                              styles.addressBubbleMain,
+                            isArabic &&
+                              styles.textRtl,
+                          ]}
+                        >
+                          {line}
+                        </Text>
+                      )
+                    )}
+                    {!!deliveryWindow && (
+                      <Text
+                        style={[
+                          styles.addressBubbleMeta,
+                          isArabic &&
+                            styles.textRtl,
+                        ]}
+                      >
+                        {t.deliveryTime}: {deliveryWindow}
+                      </Text>
+                    )}
+                    {!!addressNote && (
+                      <Text
+                        style={[
+                          styles.addressBubbleMeta,
+                          isArabic &&
+                            styles.textRtl,
+                        ]}
+                      >
+                        {t.notes}: {addressNote}
+                      </Text>
+                    )}
+                  </View>
                 )}
               </View>
             </View>
@@ -704,10 +1298,12 @@ export default function HomeScreen() {
                 ]}
               >
                 {t.editCutoff}{' '}
-                {(nextOrder as any)
-                  ?.edit_cutoff ||
-                  '—'}{' '}
-                {t.awaiting}
+                <Text style={styles.cutoffStrong}>
+                  {cutoffLabel}
+                </Text>{' '}
+                {cutoffPassed
+                  ? t.cutoffPassed
+                  : t.awaiting}
               </Text>
             </View>
             <View
@@ -771,6 +1367,7 @@ export default function HomeScreen() {
             >
               {t.yourPets}
             </Text>
+            {pets.length > 0 && (
             <Pressable
               style={[
                 styles.sectionLink,
@@ -798,7 +1395,56 @@ export default function HomeScreen() {
                 {t.viewDetails}
               </Text>
             </Pressable>
+            )}
           </View>
+          {pets.length === 0 ? (
+            <View style={styles.noPetsBox}>
+              <View style={styles.noPetsIcon}>
+                <Ionicons
+                  name="paw-outline"
+                  size={34}
+                  color={COLORS.primary}
+                />
+              </View>
+              <Text style={styles.noPetsTitle}>
+                {t.noPetsTitle}
+              </Text>
+              <Text style={styles.noPetsText}>
+                {t.noPetsText}
+              </Text>
+              <Pressable
+                onPress={openAddPet}
+                style={({ pressed }) => [
+                  styles.addPetButton,
+                  isArabic && styles.rowRtl,
+                  pressed && styles.addPetButtonPressed,
+                ]}
+              >
+                <Ionicons
+                  name="add"
+                  size={24}
+                  color="#FFFFFF"
+                />
+                <Text style={styles.addPetButtonText}>
+                  {t.addNewPet}
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+          fitPets ? (
+            /*
+             * 1 pet: full width / 2 pets: 50% - 50%
+             */
+            <View
+              style={[
+                styles.petRowFit,
+                isArabic &&
+                  styles.rowRtl,
+              ]}
+            >
+              {pets.map(renderPetCard)}
+            </View>
+          ) : (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={
@@ -808,102 +1454,10 @@ export default function HomeScreen() {
               styles.petRow
             }
           >
-            {pets.map(
-              (pet: any) => {
-                const active =
-                  petIsActive(pet);
-                const date =
-                  petNextDate(pet);
-                return (
-                  <Pressable
-                    key={String(
-                      pet.id
-                    )}
-                    style={
-                      styles.petCard
-                    }
-                    onPress={() =>
-                      openPet(pet)
-                    }
-                  >
-                    <View
-                      style={
-                        styles.petImage
-                      }
-                    >
-                      {pet.photo_url ? (
-                        <Image
-                          source={{
-                            uri:
-                              pet.photo_url,
-                          }}
-                          style={
-                            styles.fillImage
-                          }
-                        />
-                      ) : (
-                        <MaterialCommunityIcons
-                          name="cat"
-                          size={46}
-                          color={
-                            COLORS.primary
-                          }
-                        />
-                      )}
-                    </View>
-                    <Text
-                      numberOfLines={1}
-                      style={
-                        styles.petName
-                      }
-                    >
-                      {pet.name}
-                    </Text>
-                    <View
-                      style={
-                        styles.petStatusRow
-                      }
-                    >
-                      <View
-                        style={[
-                          styles.petStatusDot,
-                          !active &&
-                            styles.petStatusDotOff,
-                        ]}
-                      />
-                      <Text
-                        numberOfLines={1}
-                        style={
-                          styles.petStatusText
-                        }
-                      >
-                        {active
-                          ? t.active
-                          : t.noSubscription}
-                      </Text>
-                    </View>
-                    <Text
-                      style={
-                        styles.petNextLabel
-                      }
-                    >
-                      {t.nextFreshDelivery}
-                    </Text>
-                    <Text
-                      numberOfLines={1}
-                      style={
-                        styles.petNextDate
-                      }
-                    >
-                      {formatIsoDate(
-                        date
-                      )}
-                    </Text>
-                  </Pressable>
-                );
-              }
-            )}
+            {pets.map(renderPetCard)}
           </ScrollView>
+          )
+          )}
         </View>
         <View
           style={
@@ -1022,34 +1576,6 @@ export default function HomeScreen() {
         </View>
       </ScrollView>
     </SafeAreaView>
-  );
-}
-function CountdownBox({
-  value,
-  label,
-}: {
-  value: string;
-  label: string;
-}) {
-  return (
-    <View
-      style={styles.countdownBox}
-    >
-      <Text
-        style={
-          styles.countdownValue
-        }
-      >
-        {value}
-      </Text>
-      <Text
-        style={
-          styles.countdownUnit
-        }
-      >
-        {label}
-      </Text>
-    </View>
   );
 }
 function UpdateRow({
@@ -1434,6 +1960,81 @@ const styles =
         'flex-start',
       gap: 10,
     },
+    addressTitleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      alignSelf: 'flex-start',
+      gap: 6,
+    },
+    addressTitleLink: {
+      textDecorationLine: 'underline',
+      textDecorationStyle: 'dotted',
+    },
+    addressBubble: {
+      marginTop: 10,
+      padding: 14,
+      borderRadius: 12,
+      backgroundColor: '#FFFFFF',
+      borderWidth: 1,
+      borderColor: '#C9DDD7',
+      shadowColor: '#000',
+      shadowOffset: {
+        width: 0,
+        height: 3,
+      },
+      shadowOpacity: 0.08,
+      shadowRadius: 8,
+      elevation: 3,
+    },
+    addressBubbleRtl: {},
+    addressBubbleArrow: {
+      position: 'absolute',
+      top: -7,
+      left: 18,
+      width: 12,
+      height: 12,
+      backgroundColor: '#FFFFFF',
+      borderLeftWidth: 1,
+      borderTopWidth: 1,
+      borderColor: '#C9DDD7',
+      transform: [{ rotate: '45deg' }],
+    },
+    addressBubbleArrowRtl: {
+      left: undefined,
+      right: 18,
+    },
+    addressBubbleHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 6,
+    },
+    addressBubbleTitle: {
+      fontFamily: 'Cairo_700Bold',
+      fontSize: 11,
+      letterSpacing: 1,
+      color: COLORS.primary,
+    },
+    addressBubbleText: {
+      fontFamily: 'Cairo_400Regular',
+      fontSize: 13,
+      lineHeight: 21,
+      color: COLORS.text,
+    },
+    addressBubbleMain: {
+      fontFamily: 'Cairo_600SemiBold',
+    },
+    addressBubbleMeta: {
+      marginTop: 6,
+      fontFamily: 'Cairo_400Regular',
+      fontSize: 12,
+      lineHeight: 19,
+      color: COLORS.muted,
+    },
+    cutoffStrong: {
+      fontFamily: 'Cairo_700Bold',
+      color: COLORS.text,
+    },
     addressTitle: {
       fontFamily:
         'Cairo_700Bold',
@@ -1528,12 +2129,111 @@ const styles =
       fontSize: 13,
       color: COLORS.text,
     },
+    noPetsBox: {
+      alignItems: 'center',
+      paddingVertical: 28,
+      paddingHorizontal: 20,
+      borderWidth: 1,
+      borderStyle: 'dashed',
+      borderColor: '#BFDCD6',
+      borderRadius: 14,
+      backgroundColor: '#F1F6F3',
+    },
+    noPetsIcon: {
+      width: 66,
+      height: 66,
+      borderRadius: 33,
+      backgroundColor: '#E1EEEA',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 14,
+    },
+    noPetsTitle: {
+      fontFamily: 'Cairo_700Bold',
+      fontSize: 18,
+      lineHeight: 27,
+      color: COLORS.text,
+      textAlign: 'center',
+    },
+    noPetsText: {
+      marginTop: 4,
+      fontFamily: 'Cairo_400Regular',
+      fontSize: 14,
+      lineHeight: 22,
+      color: COLORS.muted,
+      textAlign: 'center',
+    },
+    addPetButton: {
+      alignSelf: 'stretch',
+      minHeight: 61,
+      marginTop: 20,
+      borderRadius: 10,
+      backgroundColor: COLORS.dark,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 10,
+      paddingHorizontal: 16,
+    },
+    addPetButtonPressed: {
+      opacity: 0.88,
+    },
+    addPetButtonText: {
+      fontFamily: 'Cairo_700Bold',
+      fontSize: 15,
+      color: '#FFFFFF',
+    },
     petRow: {
       gap: 15,
       paddingRight: 1,
     },
     petCard: {
       width: 117,
+    },
+    petCardFit: {
+      width: undefined,
+      flex: 1,
+    },
+    petImageFit: {
+      width: '100%',
+      height: 150,
+    },
+    petImageSingle: {
+      width: '50%',
+      height: 165,
+    },
+    petSingleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 18,
+    },
+    petInfoSingle: {
+      flex: 1,
+      minWidth: 0,
+    },
+    petNameSingle: {
+      marginTop: 0,
+      fontSize: 24,
+      lineHeight: 32,
+    },
+    petStatusTextSingle: {
+      fontSize: 12,
+    },
+    petNextDateSingle: {
+      fontSize: 14,
+    },
+    choosePlanButtonSingle: {
+      marginTop: 18,
+      minHeight: 58,
+      flexDirection: 'row',
+      gap: 10,
+    },
+    choosePlanTextSingle: {
+      fontSize: 15,
+    },
+    petRowFit: {
+      flexDirection: 'row',
+      gap: 15,
     },
     petImage: {
       width: 117,
@@ -1576,6 +2276,43 @@ const styles =
     petStatusDotOff: {
       backgroundColor:
         '#D7D0C7',
+    },
+    petStatusDotPending: {
+      backgroundColor:
+        '#E9A23B',
+    },
+    choosePlanButton: {
+      marginTop: 14,
+      minHeight: 64,
+      borderRadius: 12,
+      backgroundColor:
+        COLORS.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 3,
+      paddingVertical: 8,
+      paddingHorizontal: 8,
+      shadowColor: COLORS.primary,
+      shadowOffset: {
+        width: 0,
+        height: 4,
+      },
+      shadowOpacity: 0.28,
+      shadowRadius: 8,
+      elevation: 4,
+    },
+    choosePlanButtonPending: {
+      backgroundColor:
+        '#E9A23B',
+      shadowColor: '#E9A23B',
+    },
+    choosePlanText: {
+      fontFamily:
+        'Cairo_700Bold',
+      fontSize: 13,
+      lineHeight: 18,
+      color: '#FFFFFF',
+      textAlign: 'center',
     },
     petStatusText: {
       flexShrink: 1,

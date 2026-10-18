@@ -20,11 +20,13 @@ import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 
 import { useAppLanguage } from "../../context/LanguageContext";
 import { createPurchase, fetchProducts } from "../../services/purchaseApi";
+import { payShopPurchase } from "../../services/shopApi";
+import CardPaymentSheet, { type CardMethod } from "../../components/shop/CardPaymentSheet";
 import type { CatalogAnimal, PaymentMethod, PaymentMethodOption, Product } from "../../types/purchase";
 
 import { BackRow, CenteredLoader, ErrorState, PageTitle, PrimaryButton } from "../../components/purchase/ScreenParts";
 import { formatPrice } from "../../components/purchase/SubscriptionCard";
-import { FONTS, PCOLORS, purchaseTexts } from "../../components/purchase/purchaseUtils";
+import { FONTS, PCOLORS, formatDate, purchaseTexts } from "../../components/purchase/purchaseUtils";
 
 /*
 |--------------------------------------------------------------------------
@@ -32,6 +34,11 @@ import { FONTS, PCOLORS, purchaseTexts } from "../../components/purchase/purchas
 |--------------------------------------------------------------------------
 |
 | Params: animalId? (pre-selected pet)
+|
+| Payment: card only (KNET or Visa / Mastercard). The purchase is created
+| "pending", then the card sheet pays it (SIMULATION until the payment
+| gateway is connected). Sheet closed: the purchase stays pending and
+| "Choose this plan" again pays the same purchase (no duplicate).
 |
 */
 
@@ -61,10 +68,18 @@ export default function PlansScreen() {
         checkoutTitle: "تأكيد الطلب",
         paymentMethod: "طريقة الدفع",
         note: "ملاحظة (اختياري)",
-        confirm: "تأكيد الشراء",
-        transferInfo: "بعد التأكيد، أرسل إيصال التحويل من صفحة الطلب. سيتم تفعيل الباقة بعد التحقق من الدفع.",
-        cashInfo: "سيتم تفعيل الباقة بعد تأكيد فريقنا للطلب.",
+        confirm: "الدفع",
+        cardInfo: "ستتم إعادة توجيهك إلى صفحة الدفع الآمن. يتم تأكيد الطلب فور نجاح الدفع.",
+        knetHint: "بطاقة السحب الكويتية",
+        cardHint: "بطاقة ائتمان",
         recipesIncluded: "الوصفات المتاحة",
+        plansFor: "باقات مناسبة لـ",
+        trialOffer: "عرض الفترة التجريبية",
+        trialBannerTitle: "سعر خاص أثناء الفترة التجريبية",
+        trialBannerText: "استمتع بأسعار خاصة على الباقات المميزة طوال الفترة التجريبية",
+        until: "حتى",
+        trialRunning: "قبل نهاية الباقة التجريبية",
+        ages: "مناسبة لـ",
       }
     : {
         title: "Choose a Plan",
@@ -84,10 +99,18 @@ export default function PlansScreen() {
         checkoutTitle: "Confirm your order",
         paymentMethod: "Payment method",
         note: "Note (optional)",
-        confirm: "Confirm purchase",
-        transferInfo: "After confirming, send your transfer receipt from the order page. The plan is activated once the payment is verified.",
-        cashInfo: "The plan is activated once our team confirms your order.",
+        confirm: "Pay now",
+        cardInfo: "You will pay on the secure payment page. Your order is confirmed as soon as the payment succeeds.",
+        knetHint: "Kuwaiti debit card",
+        cardHint: "Credit card",
         recipesIncluded: "Available recipes",
+        plansFor: "Plans for",
+        trialOffer: "Trial offer",
+        trialBannerTitle: "Special prices during the trial",
+        trialBannerText: "Enjoy special prices on the marked plans while the trial is running",
+        until: "until",
+        trialRunning: "before the end of the trial pack",
+        ages: "Suited for",
       };
 
   const [animals, setAnimals] = useState<CatalogAnimal[]>([]);
@@ -104,6 +127,14 @@ export default function PlansScreen() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | null>(null);
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // Card payment of the purchase just created
+  const [payment, setPayment] = useState<{
+    purchaseId: number;
+    method: CardMethod;
+    amount: number;
+    currency: string;
+  } | null>(null);
 
   /*
   |--------------------------------------------------------------------------
@@ -166,18 +197,40 @@ export default function PlansScreen() {
         customer_note: note.trim() || null,
       });
 
+      const product = checkoutProduct;
       setCheckoutProduct(null);
 
-      if (result.message) {
-        Alert.alert(base.success, result.message);
-      }
-
-      router.replace({ pathname: "/purchase", params: { id: String(result.purchase.id) } });
+      // Purchase "pending" (new or already waiting): open the card payment
+      setPayment({
+        purchaseId: result.purchase.id,
+        method: paymentMethod === "card" ? "card" : "knet",
+        amount: product.current_price,
+        currency: product.currency,
+      });
     } catch (e: any) {
       Alert.alert("", e?.message || base.error);
     } finally {
       setSubmitting(false);
     }
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | CARD PAYMENT (simulation)
+  |--------------------------------------------------------------------------
+  */
+
+  const payPurchase = async (cardLast4: string) => {
+    if (!payment) return;
+
+    await payShopPurchase(lang, payment.purchaseId, payment.method, cardLast4);
+
+    // Success animation, then the subscription page
+    const purchaseId = payment.purchaseId;
+    setTimeout(() => {
+      setPayment(null);
+      router.replace({ pathname: "/purchase", params: { id: String(purchaseId) } });
+    }, 1300);
   };
 
   /*
@@ -258,6 +311,37 @@ export default function PlansScreen() {
           </>
         )}
 
+        {/* PET AGE */}
+        {animal && (
+          <View style={[styles.petInfoRow, isArabic && styles.rowRtl]}>
+            <MaterialCommunityIcons
+              name={animal.species === "Dog" ? "dog" : "cat"}
+              size={18}
+              color={PCOLORS.primary}
+            />
+            <Text style={[styles.petInfoText, isArabic && styles.textRtl]}>
+              {t.plansFor} <Text style={styles.petInfoStrong}>{animal.name}</Text>
+              {animal.age_label ? ` · ${animal.age_label}` : ""}
+            </Text>
+          </View>
+        )}
+
+        {/* TRIAL OFFER BANNER */}
+        {animal?.trial && animal.products.some(p => p.trial_offer?.active) && (
+          <View style={[styles.trialBanner, isArabic && styles.rowRtl]}>
+            <View style={styles.trialBannerIcon}>
+              <MaterialCommunityIcons name="gift-outline" size={24} color={PCOLORS.white} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.trialBannerTitle, isArabic && styles.textRtl]}>{t.trialBannerTitle}</Text>
+              <Text style={[styles.trialBannerText, isArabic && styles.textRtl]}>
+                {t.trialBannerText} ({animal.trial.product_name})
+                {animal.trial.ends_on ? ` ${t.until} ${formatDate(animal.trial.ends_on, isArabic)}` : ""}.
+              </Text>
+            </View>
+          </View>
+        )}
+
         {/* PRODUCTS */}
         {animal && animal.products.length === 0 && (
           <View style={styles.empty}>
@@ -303,7 +387,20 @@ export default function PlansScreen() {
                     </Text>
                     <Text style={[styles.summaryPrice, isArabic && styles.textRtl]}>
                       {formatPrice(checkoutProduct.current_price)} {checkoutProduct.currency}
+                      {checkoutProduct.has_promo && (
+                        <Text style={styles.summaryOldPrice}>
+                          {"  "}{formatPrice(checkoutProduct.price)}
+                        </Text>
+                      )}
                     </Text>
+                    {checkoutProduct.trial_offer?.active && (
+                      <Text style={[styles.summaryOffer, isArabic && styles.textRtl]}>
+                        🎁 {t.trialOffer}
+                        {checkoutProduct.trial_offer.ends_on
+                          ? ` · ${t.until} ${formatDate(checkoutProduct.trial_offer.ends_on, isArabic)}`
+                          : ""}
+                      </Text>
+                    )}
                   </View>
 
                   <Text style={[styles.sectionLabel, isArabic && styles.textRtl]}>{t.paymentMethod}</Text>
@@ -322,15 +419,27 @@ export default function PlansScreen() {
                           size={22}
                           color={active ? PCOLORS.primary : PCOLORS.muted}
                         />
-                        <Text style={styles.methodText}>{method.label}</Text>
+                        {method.value === "knet" ? (
+                          <View style={styles.knetBadge}>
+                            <Text style={styles.knetBadgeText}>KNET</Text>
+                          </View>
+                        ) : (
+                          <View style={styles.cardBadge}>
+                            <Ionicons name="card" size={15} color={PCOLORS.white} />
+                          </View>
+                        )}
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.methodText, isArabic && styles.textRtl]}>{method.label}</Text>
+                          <Text style={[styles.methodHint, isArabic && styles.textRtl]}>
+                            {method.value === "knet" ? t.knetHint : t.cardHint}
+                          </Text>
+                        </View>
                       </Pressable>
                     );
                   })}
 
                   {!!paymentMethod && (
-                    <Text style={[styles.infoText, isArabic && styles.textRtl]}>
-                      {paymentMethod === "bank_transfer" ? t.transferInfo : t.cashInfo}
-                    </Text>
+                    <Text style={[styles.infoText, isArabic && styles.textRtl]}>{t.cardInfo}</Text>
                   )}
 
                   <Text style={[styles.sectionLabel, isArabic && styles.textRtl]}>{t.note}</Text>
@@ -345,6 +454,7 @@ export default function PlansScreen() {
                   <View style={{ marginTop: 20 }}>
                     <PrimaryButton
                       label={t.confirm}
+                      icon="lock-closed-outline"
                       onPress={confirmPurchase}
                       loading={submitting}
                       disabled={!paymentMethod}
@@ -356,6 +466,17 @@ export default function PlansScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* CARD PAYMENT (simulation) */}
+      <CardPaymentSheet
+        visible={!!payment}
+        method={payment?.method ?? "knet"}
+        amount={payment?.amount ?? 0}
+        currency={payment?.currency ?? "KWD"}
+        isArabic={isArabic}
+        onClose={() => setPayment(null)}
+        onPay={payPurchase}
+      />
     </SafeAreaView>
   );
 }
@@ -390,8 +511,10 @@ function ProductCard({
       ? `${rules.max_recipes_per_delivery}`
       : `${rules.min_recipes_per_delivery}–${rules.max_recipes_per_delivery}`;
 
+  const trialOffer = product.trial_offer?.active ? product.trial_offer : null;
+
   return (
-    <View style={styles.productCard}>
+    <View style={[styles.productCard, trialOffer && styles.productCardOffer]}>
       {!!product.image_url && <Image source={{ uri: product.image_url }} style={styles.productImage} />}
 
       <View style={[styles.badges, isArabic && styles.rowRtl]}>
@@ -404,6 +527,12 @@ function ProductCard({
         {product.is_trial && (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>{t.trial}</Text>
+          </View>
+        )}
+        {!!trialOffer && (
+          <View style={[styles.badge, styles.badgeOffer]}>
+            <MaterialCommunityIcons name="gift-outline" size={13} color={PCOLORS.white} />
+            <Text style={[styles.badgeText, { color: PCOLORS.white }]}>{t.trialOffer}</Text>
           </View>
         )}
         {product.has_promo && (
@@ -427,12 +556,21 @@ function ProductCard({
       <Text style={[styles.pricePerMeal, rtl]}>
         {formatPrice(product.price_per_recipe)} {product.currency} {t.perMeal}
       </Text>
+      {!!trialOffer && (
+        <Text style={[styles.offerNote, rtl]}>
+          {t.trialRunning}
+          {trialOffer.ends_on ? ` · ${t.until} ${formatDate(trialOffer.ends_on, isArabic)}` : ""}
+        </Text>
+      )}
 
       {/* FACTS */}
       <View style={styles.facts}>
         <Fact icon="food-variant" text={`${product.total_recipes} ${t.recipes} · ${product.duration_label}`} isArabic={isArabic} />
         <Fact icon="truck-outline" text={`${deliveries} ${t.deliveries}`} isArabic={isArabic} />
         <Fact icon="package-variant-closed" text={`${perDelivery} ${t.perDelivery}`} isArabic={isArabic} />
+        {!!product.life_stages?.length && !!product.life_stages_label && (
+          <Fact icon="cake-variant-outline" text={`${t.ages} ${product.life_stages_label}`} isArabic={isArabic} />
+        )}
       </View>
 
       {product.recipes.length > 0 && (
@@ -546,6 +684,56 @@ const styles = StyleSheet.create({
   },
   badgePremium: { backgroundColor: "#F8EDC8" },
   badgePromo: { backgroundColor: PCOLORS.danger },
+  badgeOffer: { backgroundColor: PCOLORS.warning },
+  productCardOffer: {
+    borderTopColor: PCOLORS.warning,
+    borderWidth: 1,
+    borderColor: "#F0CF94",
+    backgroundColor: PCOLORS.warningLight,
+  },
+  offerNote: {
+    marginTop: 6,
+    fontFamily: FONTS.semiBold,
+    fontSize: 12.5,
+    color: "#A86A12",
+  },
+
+  petInfoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 16,
+  },
+  petInfoText: { flex: 1, fontFamily: FONTS.regular, fontSize: 14, color: PCOLORS.muted },
+  petInfoStrong: { fontFamily: FONTS.bold, color: PCOLORS.text },
+
+  trialBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    padding: 16,
+    marginBottom: 22,
+    borderRadius: 12,
+    backgroundColor: PCOLORS.warningLight,
+    borderWidth: 1,
+    borderColor: "#F0CF94",
+  },
+  trialBannerIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: PCOLORS.warning,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  trialBannerTitle: { fontFamily: FONTS.bold, fontSize: 15, color: PCOLORS.text },
+  trialBannerText: {
+    marginTop: 2,
+    fontFamily: FONTS.regular,
+    fontSize: 12.5,
+    lineHeight: 19,
+    color: PCOLORS.muted,
+  },
   badgeText: { fontFamily: FONTS.semiBold, fontSize: 11, color: PCOLORS.primary },
 
   productName: { fontFamily: FONTS.bold, fontSize: 24, lineHeight: 32, color: PCOLORS.text },
@@ -610,6 +798,13 @@ const styles = StyleSheet.create({
   summaryName: { fontFamily: FONTS.bold, fontSize: 17, color: PCOLORS.text },
   summaryMeta: { marginTop: 4, fontFamily: FONTS.regular, fontSize: 13, color: PCOLORS.muted },
   summaryPrice: { marginTop: 8, fontFamily: FONTS.bold, fontSize: 22, color: PCOLORS.text },
+  summaryOldPrice: {
+    fontFamily: FONTS.regular,
+    fontSize: 15,
+    color: PCOLORS.muted,
+    textDecorationLine: "line-through",
+  },
+  summaryOffer: { marginTop: 4, fontFamily: FONTS.semiBold, fontSize: 13, color: "#A86A12" },
 
   methodRow: {
     flexDirection: "row",
@@ -624,6 +819,10 @@ const styles = StyleSheet.create({
   },
   methodRowActive: { borderColor: PCOLORS.primary, backgroundColor: "rgba(36,155,151,0.06)" },
   methodText: { fontFamily: FONTS.semiBold, fontSize: 15, color: PCOLORS.text },
+  methodHint: { fontFamily: FONTS.regular, fontSize: 12, color: PCOLORS.muted },
+  knetBadge: { height: 24, minWidth: 44, borderRadius: 5, backgroundColor: "#0B4A8B", alignItems: "center", justifyContent: "center", paddingHorizontal: 5 },
+  knetBadgeText: { fontFamily: FONTS.extraBold, fontSize: 10, color: PCOLORS.white, letterSpacing: 0.5 },
+  cardBadge: { height: 24, minWidth: 44, borderRadius: 5, backgroundColor: PCOLORS.dark, alignItems: "center", justifyContent: "center" },
   infoText: {
     marginBottom: 14,
     fontFamily: FONTS.regular,

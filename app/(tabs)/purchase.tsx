@@ -1,445 +1,288 @@
-import React, { useCallback, useState } from "react";
-import {
-  Alert,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
-import * as ImagePicker from "expo-image-picker";
-
-import { useAppLanguage } from "../../context/LanguageContext";
-import { cancelPurchase, fetchPurchase, uploadPaymentProof } from "../../services/purchaseApi";
-import type { PurchaseDetail } from "../../types/purchase";
-
-import SubscriptionCard from "../../components/purchase/SubscriptionCard";
-import { BackRow, CenteredLoader, ErrorState, PrimaryButton, StatusDot } from "../../components/purchase/ScreenParts";
-import {
-  FONTS,
-  PCOLORS,
-  deliveryMarker,
-  formatLongDate,
-  markerColor,
-  purchaseTexts,
-  slotLabel,
-} from "../../components/purchase/purchaseUtils";
-
 /*
 |--------------------------------------------------------------------------
-| PURCHASE DETAIL
+| PRODUCTS (PACKS) & PURCHASES
 |--------------------------------------------------------------------------
 |
-| Params: id
+| Same shapes as the Laravel API (MobilePurchaseController).
 |
 */
 
-export default function PurchaseScreen() {
-  const { isArabic } = useAppLanguage();
-  const lang = isArabic ? "ar" : "en";
-  const base = purchaseTexts(isArabic);
+export type Species = "Cat" | "Dog";
 
-  const params = useLocalSearchParams<{ id?: string }>();
-  const purchaseId = Number(params.id);
+export type PurchaseStatus =
+  | "pending"
+  | "paid"
+  | "active"
+  | "completed"
+  | "expired"
+  | "cancelled"
+  | "refunded";
 
-  const t = isArabic
-    ? {
-        reference: "رقم الطلب",
-        paymentTitle: "الدفع",
-        transferTitle: "التحويل البنكي",
-        transferText: "قم بالتحويل ثم أرسل صورة الإيصال. سنقوم بتفعيل باقتك بعد التحقق.",
-        reference_placeholder: "رقم العملية (اختياري)",
-        pickReceipt: "اختيار صورة الإيصال",
-        sending: "جاري الإرسال...",
-        cancelTitle: "إلغاء الطلب",
-        cancelMessage: "هل تريد إلغاء هذا الطلب؟",
-        yesCancel: "نعم، إلغاء",
-        deliveriesTitle: "التوصيلات",
-        planHint: "اختر تواريخ التوصيل ووزّع وجباتك.",
-        photoPermission: "يجب السماح للتطبيق بالوصول إلى الصور.",
-      }
-    : {
-        reference: "Order",
-        paymentTitle: "Payment",
-        transferTitle: "Bank transfer",
-        transferText: "Make the transfer, then send a photo of the receipt. We activate your plan once it is verified.",
-        reference_placeholder: "Transaction number (optional)",
-        pickReceipt: "Choose receipt photo",
-        sending: "Sending...",
-        cancelTitle: "Cancel purchase",
-        cancelMessage: "Do you want to cancel this purchase?",
-        yesCancel: "Yes, cancel",
-        deliveriesTitle: "Deliveries",
-        planHint: "Choose your delivery dates and split your meals.",
-        photoPermission: "Please allow access to your photos.",
-      };
+export type DeliveryStatus = "scheduled" | "prepared" | "delivered" | "cancelled";
 
-  const [purchase, setPurchase] = useState<PurchaseDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
+export type PaymentMethod = "bank_transfer" | "cash" | "knet" | "card" | "shopify" | "free" | "other";
 
-  const [paymentReference, setPaymentReference] = useState("");
-  const [uploading, setUploading] = useState(false);
+/*
+|--------------------------------------------------------------------------
+| CATALOG
+|--------------------------------------------------------------------------
+*/
 
-  const load = useCallback(async () => {
-    if (!purchaseId) {
-      setError(base.error);
-      setLoading(false);
-      return;
-    }
+export type PackRules = {
+  min_deliveries: number;
+  max_deliveries: number;
+  min_recipes_per_delivery: number;
+  max_recipes_per_delivery: number;
+  min_days_between_deliveries: number | null;
+};
 
-    try {
-      setError("");
-      setPurchase(await fetchPurchase(purchaseId, lang));
-    } catch (e: any) {
-      setError(e?.message || base.error);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [purchaseId, lang]);
+export type PackRecipe = {
+  id: number;
+  name: string;
+  code?: string | null;
+  is_premium: boolean;
+  max_quantity: number | null;
+  is_default: boolean;
+};
 
-  useFocusEffect(
-    useCallback(() => {
-      void load();
-    }, [load])
-  );
+export type Product = {
+  id: number;
+  code: string;
+  name: string;
+  name_en: string;
+  name_ar?: string | null;
+  description?: string | null;
+  image_url?: string | null;
 
-  /*
-  |--------------------------------------------------------------------------
-  | ACTIONS
-  |--------------------------------------------------------------------------
-  */
+  species: Species;
+  breed_size_category?: string | null;
+  life_stages?: LifeStage[]; // [] = all ages
+  life_stages_label?: string;
+  product_type: "regular" | "premium";
+  is_premium: boolean;
+  is_trial: boolean;
 
-  const openPlanning = () =>
-    router.push({ pathname: "/distribute-package", params: { id: String(purchaseId) } });
+  price: number;
+  current_price: number; // price for this pet (promo / trial offer included)
+  has_promo: boolean;
+  discount_percent: number;
+  promo_ends_at?: string | null;
+  price_source?: PriceSource;
+  trial_offer?: TrialOffer;
+  currency: string;
+  price_per_recipe: number;
 
-  const openRenew = () =>
-    router.push({ pathname: "/plans", params: purchase?.animal ? { animalId: String(purchase.animal.id) } : {} });
+  duration_value: number;
+  duration_unit: "day" | "week" | "month" | "year";
+  duration_label: string;
 
-  const sendReceipt = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  total_recipes: number;
+  rules: PackRules;
+  recipes: PackRecipe[];
 
-    if (!permission.granted) {
-      Alert.alert("", t.photoPermission);
-      return;
-    }
+  purchases_count: number;
+  max_purchases_per_customer: number | null;
+  can_purchase: boolean;
+};
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      quality: 0.8,
-    });
+export type LifeStage = "Kitten" | "Puppy" | "Adult" | "Senior";
 
-    if (result.canceled || !result.assets.length) return;
+export type PriceSource = "regular" | "promo" | "trial_offer" | "manual";
 
-    const asset = result.assets[0];
+/** Special price while the pet's trial pack is running. */
+export type TrialOffer = {
+  active: boolean;
+  price: number | null;
+  ends_on: string | null; // last day of the trial (null = not started yet)
+  trial_product_name: string | null;
+};
 
-    try {
-      setUploading(true);
+export type CatalogAnimal = {
+  id: number;
+  name: string;
+  species: Species;
+  breed_size_category?: string | null;
+  age?: string | null;
+  age_label?: string | null;
+  photo_url?: string | null;
+  trial?: {
+    purchase_id: number;
+    product_name: string;
+    ends_on: string | null;
+  } | null;
+  products: Product[];
+};
 
-      const response = await uploadPaymentProof(
-        purchaseId,
-        lang,
-        { uri: asset.uri, name: asset.fileName ?? undefined, mimeType: asset.mimeType },
-        paymentReference.trim() || undefined
-      );
-
-      setPurchase(response.purchase);
-      setPaymentReference("");
-
-      if (response.message) Alert.alert(base.success, response.message);
-    } catch (e: any) {
-      Alert.alert("", e?.message || base.error);
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const confirmCancel = () => {
-    Alert.alert(t.cancelTitle, t.cancelMessage, [
-      { text: base.cancel, style: "cancel" },
-      {
-        text: t.yesCancel,
-        style: "destructive",
-        onPress: async () => {
-          try {
-            setPurchase(await cancelPurchase(purchaseId, lang));
-          } catch (e: any) {
-            Alert.alert("", e?.message || base.error);
-          }
-        },
-      },
-    ]);
-  };
-
-  /*
-  |--------------------------------------------------------------------------
-  | RENDER
-  |--------------------------------------------------------------------------
-  */
-
-  if (loading) {
-    return (
-      <SafeAreaView edges={["left", "right"]} style={styles.safeArea}>
-        <CenteredLoader />
-      </SafeAreaView>
-    );
-  }
-
-  if (error || !purchase) {
-    return (
-      <SafeAreaView edges={["left", "right"]} style={styles.safeArea}>
-        <View style={styles.page}>
-          <BackRow label={base.back} isArabic={isArabic} />
-          <ErrorState message={error || base.error} retryLabel={base.retry} onRetry={load} />
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  const rtl = isArabic ? styles.textRtl : null;
-  const deliveries = purchase.deliveries;
-
-  return (
-    <SafeAreaView edges={["left", "right"]} style={styles.safeArea}>
-      <ScrollView
-        contentContainerStyle={styles.page}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => {
-              setRefreshing(true);
-              void load();
-            }}
-            tintColor={PCOLORS.primary}
-          />
-        }
-      >
-        <BackRow
-          label={base.back}
-          isArabic={isArabic}
-          right={
-            purchase.animal ? (
-              <StatusDot color={PCOLORS.primary} label={purchase.animal.name} isArabic={isArabic} />
-            ) : null
-          }
-        />
-
-        <Text style={[styles.reference, rtl]}>
-          {t.reference} {purchase.reference}
-        </Text>
-
-        <SubscriptionCard
-          purchase={purchase}
-          isArabic={isArabic}
-          onPlan={openPlanning}
-          onRenew={["completed", "expired", "active"].includes(purchase.status) ? openRenew : undefined}
-          onCancel={confirmCancel}
-        />
-
-        {/* BANK TRANSFER RECEIPT */}
-        {purchase.can_upload_payment_proof && purchase.payment.method === "bank_transfer" && (
-          <View style={styles.section}>
-            <Text style={[styles.sectionTitle, rtl]}>{t.transferTitle}</Text>
-            <Text style={[styles.sectionText, rtl]}>{t.transferText}</Text>
-
-            {purchase.payment.proof_uploaded && (
-              <View style={[styles.okBox, isArabic && styles.rowRtl]}>
-                <Ionicons name="checkmark-circle" size={19} color={PCOLORS.primary} />
-                <Text style={[styles.okText, rtl]}>{base.receiptSent}</Text>
-              </View>
-            )}
-
-            <TextInput
-              value={paymentReference}
-              onChangeText={setPaymentReference}
-              placeholder={t.reference_placeholder}
-              placeholderTextColor={PCOLORS.muted}
-              style={[styles.input, isArabic && styles.textRtl]}
-            />
-
-            <PrimaryButton
-              label={uploading ? t.sending : t.pickReceipt}
-              icon="cloud-upload-outline"
-              loading={uploading}
-              onPress={sendReceipt}
-            />
-          </View>
-        )}
-
-        {/* DELIVERIES */}
-        {purchase.is_active && (
-          <View style={styles.section}>
-            <Text style={[styles.sectionTitle, rtl]}>{t.deliveriesTitle}</Text>
-
-            {deliveries.length === 0 ? (
-              <Text style={[styles.sectionText, rtl]}>{t.planHint}</Text>
-            ) : (
-              deliveries.map((delivery, index) => {
-                const marker = deliveryMarker(delivery);
-
-                return (
-                  <Pressable
-                    key={delivery.id}
-                    style={[styles.deliveryRow, index < deliveries.length - 1 && styles.rowBorder]}
-                    onPress={() =>
-                      router.push({
-                        pathname: "/manage-delivery",
-                        params: { purchaseId: String(purchase.id), deliveryId: String(delivery.id) },
-                      })
-                    }
-                  >
-                    <View style={[styles.deliveryHeader, isArabic && styles.rowRtl]}>
-                      <Text style={styles.deliveryNumber}>
-                        {base.delivery.toUpperCase()} #{delivery.number} • {delivery.recipes_count} {base.meals.toUpperCase()}
-                      </Text>
-                      <StatusDot
-                        color={markerColor(marker)}
-                        label={marker === "delayed" ? base.delayed : delivery.status_label}
-                        isArabic={isArabic}
-                      />
-                    </View>
-                    <Text style={[styles.deliveryDate, rtl]}>{formatLongDate(delivery.date, isArabic)}</Text>
-                    <Text style={[styles.deliveryMeta, rtl]}>
-                      {slotLabel(delivery.delivery_slot)}
-                      {delivery.address ? ` · ${delivery.address.label || delivery.address.address}` : ""}
-                    </Text>
-                  </Pressable>
-                );
-              })
-            )}
-
-            {/* LINKS */}
-            <View style={styles.links}>
-              <LinkRow
-                icon="calendar-clear-outline"
-                label={base.deliveryCalendar}
-                isArabic={isArabic}
-                onPress={() =>
-                  router.push({
-                    pathname: "/delivery-calendar",
-                    params: purchase.animal ? { animalId: String(purchase.animal.id) } : {},
-                  })
-                }
-              />
-              <LinkRow
-                icon="time-outline"
-                label={base.deliveryHistory}
-                isArabic={isArabic}
-                onPress={() =>
-                  router.push({
-                    pathname: "/delivery-history",
-                    params: purchase.animal ? { animalId: String(purchase.animal.id) } : {},
-                  })
-                }
-              />
-            </View>
-          </View>
-        )}
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-function LinkRow({
-  icon,
-  label,
-  onPress,
-  isArabic,
-}: {
-  icon: React.ComponentProps<typeof Ionicons>["name"];
+export type PaymentMethodOption = {
+  value: PaymentMethod;
   label: string;
-  onPress: () => void;
-  isArabic: boolean;
-}) {
-  return (
-    <Pressable style={[styles.linkRow, isArabic && styles.rowRtl]} onPress={onPress}>
-      <View style={[styles.linkLeft, isArabic && styles.rowRtl]}>
-        <Ionicons name={icon} size={23} color={PCOLORS.primary} />
-        <Text style={styles.linkText}>{label}</Text>
-      </View>
-      <Ionicons name={isArabic ? "arrow-back" : "arrow-forward"} size={19} color={PCOLORS.muted} />
-    </Pressable>
-  );
-}
+};
 
-const styles = StyleSheet.create({
-  rowRtl: { flexDirection: "row-reverse" },
-  textRtl: { textAlign: "right", writingDirection: "rtl" },
+export type ProductsResponse = {
+  success: boolean;
+  animals: CatalogAnimal[];
+  payment_methods: PaymentMethodOption[];
+};
 
-  safeArea: { flex: 1, backgroundColor: PCOLORS.background },
-  page: { paddingHorizontal: 22, paddingTop: 30, paddingBottom: 55 },
+/*
+|--------------------------------------------------------------------------
+| PURCHASES
+|--------------------------------------------------------------------------
+*/
 
-  reference: {
-    marginBottom: 12,
-    fontFamily: FONTS.semiBold,
-    fontSize: 12,
-    letterSpacing: 1,
-    color: PCOLORS.muted,
-  },
+export type DeliveryItem = {
+  recipe_id: number | null;
+  name: string;
+  quantity: number;
+};
 
-  section: {
-    marginTop: 34,
-  },
-  sectionTitle: {
-    fontFamily: FONTS.bold,
-    fontSize: 22,
-    color: PCOLORS.text,
-    marginBottom: 8,
-  },
-  sectionText: {
-    fontFamily: FONTS.regular,
-    fontSize: 14,
-    lineHeight: 22,
-    color: PCOLORS.muted,
-    marginBottom: 16,
-  },
-  okBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    padding: 12,
-    marginBottom: 14,
-    borderRadius: 9,
-    backgroundColor: PCOLORS.primaryLight,
-  },
-  okText: { flex: 1, fontFamily: FONTS.medium, fontSize: 13, color: PCOLORS.text },
-  input: {
-    minHeight: 56,
-    paddingHorizontal: 16,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: PCOLORS.border,
-    borderRadius: 8,
-    backgroundColor: PCOLORS.inputBackground,
-    fontFamily: FONTS.regular,
-    fontSize: 15,
-    color: PCOLORS.text,
-  },
+export type PurchaseDelivery = {
+  id: number;
+  number: number;
+  date: string; // YYYY-MM-DD
+  delivery_slot?: string | null;
+  status: DeliveryStatus;
+  status_label: string;
+  recipes_count: number;
+  items: DeliveryItem[];
+  address?: {
+    id: number;
+    label?: string | null;
+    address: string;
+  } | null;
+  is_editable: boolean;
+  is_delayed?: boolean;
+  edit_cutoff: string;
+};
 
-  deliveryRow: { paddingVertical: 20 },
-  rowBorder: { borderBottomWidth: 1, borderBottomColor: PCOLORS.border },
-  deliveryHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  deliveryNumber: { fontFamily: FONTS.bold, fontSize: 11, letterSpacing: 1, color: PCOLORS.text },
-  deliveryDate: { marginTop: 10, fontFamily: FONTS.bold, fontSize: 20, color: PCOLORS.text },
-  deliveryMeta: { marginTop: 4, fontFamily: FONTS.regular, fontSize: 13, color: PCOLORS.muted },
+export type PurchaseSummary = {
+  id: number;
+  reference: string;
 
-  links: { marginTop: 16, borderTopWidth: 1, borderTopColor: PCOLORS.border },
-  linkRow: {
-    minHeight: 64,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderBottomWidth: 1,
-    borderBottomColor: PCOLORS.border,
-  },
-  linkLeft: { flexDirection: "row", alignItems: "center", gap: 16, flex: 1 },
-  linkText: { fontFamily: FONTS.medium, fontSize: 15, color: PCOLORS.text },
-});
+  status: PurchaseStatus;
+  status_label: string;
+  is_active: boolean;
+
+  product: {
+    id: number | null;
+    code: string;
+    name: string;
+    image_url?: string | null;
+    species: Species;
+    product_type: "regular" | "premium";
+    is_premium: boolean;
+    is_trial: boolean;
+  };
+
+  animal: {
+    id: number;
+    name: string;
+    photo_url?: string | null;
+  } | null;
+
+  price: {
+    unit_price: number;
+    discount_amount: number;
+    total: number;
+    currency: string;
+    source?: PriceSource | null;
+    is_trial_offer?: boolean;
+  };
+
+  payment: {
+    method: PaymentMethod | null;
+    method_label?: string | null;
+    reference?: string | null;
+    proof_uploaded: boolean;
+    paid_at?: string | null;
+  };
+
+  period: {
+    purchased_at?: string | null;
+    starts_on?: string | null;
+    ends_on?: string | null;
+    duration_label: string;
+    days_left: number | null;
+  };
+
+  usage: {
+    total_recipes: number;
+    scheduled_recipes: number;
+    delivered_recipes: number;
+    remaining_recipes: number;
+    deliveries_count: number;
+    max_deliveries: number;
+  };
+
+  next_delivery: PurchaseDelivery | null;
+
+  /** Trial pack still running: special prices available on other packs. */
+  trial_offer?: {
+    available: boolean;
+    products_count: number;
+    from_price: number;
+    currency: string;
+    ends_on: string | null;
+  } | null;
+
+  can_schedule: boolean;
+  can_upload_payment_proof: boolean;
+  can_cancel: boolean;
+};
+
+export type CustomerAddressOption = {
+  id: number;
+  label?: string | null;
+  address: string;
+  is_default: boolean | number;
+  delivery_slot?: string | null;
+  zone_label?: string | null;
+  province_label?: string | null;
+};
+
+export type PurchaseDetail = PurchaseSummary & {
+  rules: PackRules & {
+    total_recipes: number;
+    edit_cutoff_hour: number;
+    rest_days?: number[]; // 0 = Sunday, no delivery
+    earliest_date: string;
+    latest_date: string;
+  };
+  deliveries: PurchaseDelivery[];
+  recipes: PackRecipe[];
+  addresses: CustomerAddressOption[];
+  delivery_slots: string[];
+  notes?: {
+    customer?: string | null;
+  };
+};
+
+/*
+|--------------------------------------------------------------------------
+| SCHEDULE PAYLOAD
+|--------------------------------------------------------------------------
+*/
+
+export type ScheduleDeliveryInput = {
+  id?: number | null;
+  date: string;
+  delivery_slot?: string | null;
+  address_id?: number | null;
+  items: { recipe_id: number; quantity: number }[];
+};
+
+export type SchedulePayload = {
+  animal_id?: number | null;
+  deliveries: ScheduleDeliveryInput[];
+};
+
+/*
+|--------------------------------------------------------------------------
+| CALENDAR / HISTORY
+|--------------------------------------------------------------------------
+*/
+
+export type DeliveryWithPurchase = {
+  purchase: PurchaseDetail;
+  delivery: PurchaseDelivery;
+};

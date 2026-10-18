@@ -6,7 +6,7 @@ import {
   StyleSheet,
 } from "react-native";
 
-import { Tabs } from "expo-router";
+import { Tabs, router } from "expo-router";
 
 import Svg, {
   Path,
@@ -25,6 +25,11 @@ import {
 } from "../../context/LanguageContext";
 
 import MchatHeader from "../../components/MchatHeader";
+
+import {
+  isSignedInNow,
+  useSession,
+} from "../../services/session";
 
 
 /*
@@ -134,6 +139,61 @@ function AccountIcon({
 
 /*
 |--------------------------------------------------------------------------
+| SHOP ICON
+|--------------------------------------------------------------------------
+*/
+
+function ShopIcon({
+  color,
+  size = 24,
+}) {
+  return (
+    <Svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+    >
+      <Path
+        d="M4 7h16l-1.2 12.2a2 2 0 0 1-2 1.8H7.2a2 2 0 0 1-2-1.8zM8.5 10V6.5a3.5 3.5 0 0 1 7 0V10"
+        fill="none"
+        stroke={color}
+        strokeWidth={1.7}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| PRIVATE TABS (visitor -> WhatsApp sign in)
+|--------------------------------------------------------------------------
+|
+| Home, My Pets and Account need an account. A visitor who taps them
+| opens the sign in screen and comes back to the tab after.
+|
+*/
+
+function privateTab(redirect) {
+  return {
+    tabPress: event => {
+      if (!isSignedInNow()) {
+        event.preventDefault();
+
+        router.push({
+          pathname: "/login",
+          params: { redirect },
+        });
+      }
+    },
+  };
+}
+
+
+/*
+|--------------------------------------------------------------------------
 | TAB ICON
 |--------------------------------------------------------------------------
 */
@@ -148,6 +208,14 @@ function TabIcon({
 
   const renderIcon = () => {
     switch (type) {
+      case "shop":
+        return (
+          <ShopIcon
+            color={color}
+            size={25}
+          />
+        );
+
       case "home":
         return (
           <HomeIcon
@@ -261,6 +329,19 @@ export default function TabsLayout() {
 
   const insets =
     useSafeAreaInsets();
+
+  /*
+   * Visitor: the Home tab shows the shop catalog
+   * (label "Shop" + bag icon). Signed in: normal Home.
+   */
+  const {
+    signedIn,
+  } = useSession();
+
+  const homeLabel =
+    signedIn
+      ? (isArabic ? "الرئيسية" : "Home")
+      : (isArabic ? "المتجر" : "Shop");
 
 
   /*
@@ -431,12 +512,11 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="index"
 
+
           options={{
 
             title:
-              isArabic
-                ? "الرئيسية"
-                : "Home",
+              homeLabel,
 
 
             tabBarIcon: ({
@@ -444,7 +524,7 @@ export default function TabsLayout() {
             }) => (
               <TabIcon
                 focused={focused}
-                type="home"
+                type={signedIn ? "home" : "shop"}
               />
             ),
 
@@ -456,9 +536,7 @@ export default function TabsLayout() {
                 focused={focused}
                 isArabic={isArabic}
               >
-                {isArabic
-                  ? "الرئيسية"
-                  : "Home"}
+                {homeLabel}
               </TabLabel>
             ),
 
@@ -474,6 +552,8 @@ export default function TabsLayout() {
 
         <Tabs.Screen
           name="pets"
+
+          listeners={privateTab("/(tabs)/pets")}
 
           options={{
 
@@ -518,6 +598,8 @@ export default function TabsLayout() {
 
         <Tabs.Screen
           name="settings"
+
+          listeners={privateTab("/(tabs)/settings")}
 
           options={{
 
@@ -724,6 +806,46 @@ export default function TabsLayout() {
             title: isArabic
               ? "تقويم التوصيل"
               : "Delivery Calendar",
+          }}
+        />
+
+        {/*
+        |--------------------------------------------------------------------------
+        | SHOP: CATALOG + PRODUCT + CHECKOUT (hidden)
+        |--------------------------------------------------------------------------
+        |
+        | No "Shop" tab: visitors see the catalog on the Home tab.
+        | /shop stays available for signed in customers.
+        |
+        */}
+
+        <Tabs.Screen
+          name="shop"
+          options={{
+            href: null,
+            title: isArabic
+              ? "المتجر"
+              : "Shop",
+          }}
+        />
+
+        <Tabs.Screen
+          name="shop-product"
+          options={{
+            href: null,
+            title: isArabic
+              ? "الباقة"
+              : "Plan",
+          }}
+        />
+
+        <Tabs.Screen
+          name="checkout"
+          options={{
+            href: null,
+            title: isArabic
+              ? "إتمام الطلب"
+              : "Checkout",
           }}
         />
 

@@ -3,153 +3,129 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from 'react';
-
-import * as SecureStore
-  from 'expo-secure-store';
-
-import { router }
-  from 'expo-router';
 
 import {
   ApiError,
   getCustomerData,
 } from '../services/customerApi';
 
+import {
+  clearSession,
+  loadSession,
+  onSessionChange,
+} from '../services/session';
+
 import type {
   Customer,
   Subscription,
 } from '../types/customer';
+
+/*
+|--------------------------------------------------------------------------
+| CUSTOMER DATA
+|--------------------------------------------------------------------------
+|
+| Visitor (no token): customer / subscription = null, isGuest = true.
+| No redirection to the login screen anymore: the shop stays open.
+| Data are reloaded automatically when the customer signs in or out.
+|
+*/
 
 type CustomerDataContextType = {
   customer: Customer | null;
   subscription: Subscription | null;
 
   loading: boolean;
-
   error: string | null;
+
+  /** true when nobody is signed in (visitor mode) */
+  isGuest: boolean;
 
   refresh: () => Promise<void>;
 };
 
 const CustomerDataContext =
-  createContext<
-    CustomerDataContextType | undefined
-  >(undefined);
+  createContext<CustomerDataContextType | undefined>(undefined);
 
 export function CustomerDataProvider({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const [customer, setCustomer] = useState<Customer | null>(null);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isGuest, setIsGuest] = useState(true);
 
-  const [
-    customer,
-    setCustomer,
-  ] = useState<Customer | null>(null);
+  // Session state used by the last refresh (avoids double loads)
+  const lastSignedIn = useRef<boolean | null>(null);
+  const refreshing = useRef(false);
 
-  const [
-    subscription,
-    setSubscription,
-  ] = useState<Subscription | null>(
-    null
-  );
+  const refresh = useCallback(async () => {
+    refreshing.current = true;
 
-  const [
-    loading,
-    setLoading,
-  ] = useState(true);
+    try {
+      setLoading(true);
+      setError(null);
 
-  const [
-    error,
-    setError,
-  ] = useState<string | null>(null);
+      const signedIn = await loadSession();
+      lastSignedIn.current = signedIn;
 
-  const refresh =
-    useCallback(async () => {
-
-      try {
-
-        setLoading(true);
-        setError(null);
-
-        /*
-         * Vérifier d'abord si une session existe.
-         * Cela évite l'erreur :
-         * "Missing access token"
-         */
-        const accessToken =
-          await SecureStore.getItemAsync(
-            'access_token'
-          );
-
-        if (!accessToken) {
-
-          setCustomer(null);
-          setSubscription(null);
-
-          return;
-        }
-
-        const data =
-          await getCustomerData();
-
-        setCustomer(
-          data.customer || null
-        );
-
-        setSubscription(
-          data.subscription || null
-        );
-
-      } catch (err) {
-
-        console.error(
-          'Customer data error:',
-          err
-        );
-
-        if (
-          err instanceof ApiError &&
-          (
-            err.status === 401 ||
-            err.status === 403
-          )
-        ) {
-
-          await SecureStore.deleteItemAsync(
-            'access_token'
-          );
-
-          await SecureStore.deleteItemAsync(
-            'access_token_expires_at'
-          );
-
-          setCustomer(null);
-          setSubscription(null);
-
-          router.replace('/login');
-
-          return;
-        }
-
-        setError(
-          err instanceof Error
-            ? err.message
-            : 'Unable to load data'
-        );
-
-      } finally {
-
-        setLoading(false);
-
+      if (!signedIn) {
+        setCustomer(null);
+        setSubscription(null);
+        setIsGuest(true);
+        return;
       }
 
-    }, []);
+      const data = await getCustomerData();
+
+      setCustomer(data.customer || null);
+      setSubscription(data.subscription || null);
+      setIsGuest(false);
+    } catch (err) {
+      console.error('Customer data error:', err);
+
+      /*
+       * Session refused by the server: back to visitor mode
+       * (the shop stays available).
+       */
+      if (
+        err instanceof ApiError &&
+        (err.status === 401 || err.status === 403)
+      ) {
+        lastSignedIn.current = false;
+        await clearSession();
+
+        setCustomer(null);
+        setSubscription(null);
+        setIsGuest(true);
+
+        return;
+      }
+
+      setError(err instanceof Error ? err.message : 'Unable to load data');
+    } finally {
+      refreshing.current = false;
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    refresh();
+    void refresh();
+
+    // Sign in / logout anywhere in the app -> reload
+    const unsubscribe = onSessionChange(signedIn => {
+      if (!refreshing.current && signedIn !== lastSignedIn.current) {
+        void refresh();
+      }
+    });
+
+    return unsubscribe;
   }, [refresh]);
 
   return (
@@ -159,6 +135,7 @@ export function CustomerDataProvider({
         subscription,
         loading,
         error,
+        isGuest,
         refresh,
       }}
     >
@@ -168,14 +145,10 @@ export function CustomerDataProvider({
 }
 
 export function useCustomerData() {
-
-  const context =
-    useContext(CustomerDataContext);
+  const context = useContext(CustomerDataContext);
 
   if (!context) {
-    throw new Error(
-      'useCustomerData must be used inside CustomerDataProvider'
-    );
+    throw new Error('useCustomerData must be used inside CustomerDataProvider');
   }
 
   return context;

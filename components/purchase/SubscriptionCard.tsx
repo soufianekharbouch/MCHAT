@@ -22,6 +22,8 @@ type Props = {
   onOpen?: () => void;
   onPlan?: () => void;
   onRenew?: () => void;
+  /** Opens the plans with the trial prices (default: onRenew). */
+  onTrialOffer?: () => void;
   onUploadReceipt?: () => void;
   onCancel?: () => void;
 };
@@ -32,6 +34,7 @@ export default function SubscriptionCard({
   onOpen,
   onPlan,
   onRenew,
+  onTrialOffer,
   onUploadReceipt,
   onCancel,
 }: Props) {
@@ -43,6 +46,26 @@ export default function SubscriptionCard({
 
   const title = `${purchase.product.name} (${usage.total_recipes} ${isArabic ? "وجبة" : "Meals"})`;
   const hasPlannedDeliveries = usage.deliveries_count > 0;
+
+  // Trial still running: invite to continue with a special price
+  const trialOffer = purchase.trial_offer?.available ? purchase.trial_offer : null;
+  const openTrialOffer = onTrialOffer ?? onRenew;
+
+  const offerTexts = isArabic
+    ? {
+        title: "عرض خاص قبل نهاية التجربة",
+        text: "استمر مع باقة كاملة بسعر خاص",
+        from: "ابتداءً من",
+        until: "حتى",
+        button: "اكتشف العرض",
+      }
+    : {
+        title: "Special offer before your trial ends",
+        text: "Continue with a full plan at a special price",
+        from: "from",
+        until: "until",
+        button: "See the offer",
+      };
 
   return (
     <Pressable onPress={onOpen} disabled={!onOpen} style={styles.card}>
@@ -159,7 +182,28 @@ export default function SubscriptionCard({
         </Pressable>
       )}
 
-      {!!onRenew && (
+      {/* TRIAL OFFER */}
+      {!!trialOffer && !!openTrialOffer && (
+        <View style={styles.offerBox}>
+          <View style={[styles.offerHeader, isArabic && styles.rowRtl]}>
+            <MaterialCommunityIcons name="gift-outline" size={22} color="#A86A12" />
+            <Text style={[styles.offerTitle, rtl]}>{offerTexts.title}</Text>
+          </View>
+          <Text style={[styles.offerText, rtl]}>
+            {offerTexts.text} · {offerTexts.from}{" "}
+            <Text style={styles.offerPrice}>
+              {formatPrice(trialOffer.from_price)} {trialOffer.currency}
+            </Text>
+            {trialOffer.ends_on ? ` · ${offerTexts.until} ${formatDate(trialOffer.ends_on, isArabic)}` : ""}
+          </Text>
+          <Pressable style={[styles.offerButton, isArabic && styles.rowRtl]} onPress={openTrialOffer}>
+            <MaterialCommunityIcons name="creation" size={22} color={PCOLORS.white} />
+            <Text style={styles.renewButtonText}>{offerTexts.button}</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {!!onRenew && !trialOffer && (
         <Pressable style={[styles.renewButton, isArabic && styles.rowRtl]} onPress={onRenew}>
           <MaterialCommunityIcons name="creation-outline" size={24} color={PCOLORS.white} />
           <Text style={styles.renewButtonText}>{t.renew}</Text>
@@ -339,6 +383,28 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bold,
     fontSize: 14,
     color: PCOLORS.text,
+  },
+  offerBox: {
+    marginTop: 18,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#F0CF94",
+    backgroundColor: PCOLORS.warningLight,
+  },
+  offerHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  offerTitle: { flex: 1, fontFamily: FONTS.bold, fontSize: 15, color: PCOLORS.text },
+  offerText: { marginTop: 6, fontFamily: FONTS.regular, fontSize: 13, lineHeight: 21, color: PCOLORS.muted },
+  offerPrice: { fontFamily: FONTS.bold, color: "#A86A12" },
+  offerButton: {
+    minHeight: 54,
+    marginTop: 14,
+    borderRadius: 9,
+    backgroundColor: PCOLORS.warning,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
   },
   renewButton: {
     minHeight: 60,
