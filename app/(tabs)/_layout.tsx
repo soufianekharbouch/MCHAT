@@ -701,7 +701,13 @@ export default function TabsLayout() {
               : "Saved Addresses",
           }}
         />
-
+        <Tabs.Screen
+          name="add-pet-plan"
+          options={{
+            href: null,
+            title: isArabic ? "إضافة حيوان" : "Add a pet",
+          }}
+        />
         <Tabs.Screen
           name="personal-information"
           options={{
@@ -856,6 +862,18 @@ export default function TabsLayout() {
             title: isArabic
               ? "سجل التوصيل"
               : "Delivery History",
+          }}
+        />
+
+        {/* LOYALTY POINTS (hidden, opened from Home) */}
+        <Tabs.Screen
+          name="loyalty"
+          listeners={privateTab("/(tabs)/loyalty")}
+          options={{
+            href: null,
+            title: isArabic
+              ? "نقاط الولاء"
+              : "Loyalty points",
           }}
         />
       </Tabs>

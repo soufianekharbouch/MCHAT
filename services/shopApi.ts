@@ -2,6 +2,7 @@ import type {
   AuthSendResponse,
   AuthVerifyResponse,
   CheckoutPayload,
+  CheckoutResult,
   ShopCatalogResponse,
   ShopPaymentMethod,
   ShopProductResponse,
@@ -78,8 +79,15 @@ async function request<T>(endpoint: string, lang: Lang, body: Record<string, unk
 | CATALOG (public)
 */
 
-export function fetchShopProducts(lang: Lang, species?: ShopSpecies | null) {
-  return request<ShopCatalogResponse>("/shop/products", lang, species ? { species } : {});
+/**
+ * includeProductId: product opened from the plans page of one pet
+ * (always returned, even if the history of the customer hides it).
+ */
+export function fetchShopProducts(lang: Lang, species?: ShopSpecies | null, includeProductId?: number | null) {
+  return request<ShopCatalogResponse>("/shop/products", lang, {
+    ...(species ? { species } : {}),
+    ...(includeProductId ? { include_product_id: includeProductId } : {}),
+  });
 }
 
 export function fetchShopProduct(lang: Lang, productId: number) {
@@ -91,7 +99,7 @@ export function fetchShopProduct(lang: Lang, productId: number) {
 */
 
 export function shopCheckout(lang: Lang, payload: CheckoutPayload) {
-  return request<{ success: boolean; message?: string; purchase: { id: number }; paid?: boolean; animal_created?: boolean; requires_login?: boolean }>(
+  return request<CheckoutResult>(
     "/shop/checkout",
     lang,
     payload as unknown as Record<string, unknown>
@@ -153,7 +161,27 @@ export type SavedAddress = {
   delivery_slot?: string | null;
 };
 
+/** New saved address (delivery slot optional). */
+export async function createSavedAddress(
+  lang: Lang,
+  payload: { province_id: number; zone_id: number; address: string; note?: string | null; delivery_slot?: string | null; label?: string | null }
+): Promise<SavedAddress & { id: number }> {
+  const data = await request<{ address: SavedAddress & { id: number } }>("/settings/addresses/create", lang, payload);
+  return data.address;
+}
+
 export async function fetchSavedAddresses(lang: Lang): Promise<SavedAddress[]> {
   const data = await request<{ addresses?: SavedAddress[] }>("/settings/addresses", lang);
   return Array.isArray(data?.addresses) ? data.addresses : [];
+}
+
+/**
+ * One tap planning: day of the first delivery, the recipes (and the next
+ * deliveries of the pack) are planned automatically by the server.
+ */
+export function quickPlanPurchase(lang: Lang, purchaseId: number, date: string, deliverySlot?: string | null) {
+  return request<{ success: boolean; message?: string; purchase: any }>(`/purchases/${purchaseId}/quick-plan`, lang, {
+    date,
+    delivery_slot: deliverySlot || null,
+  });
 }

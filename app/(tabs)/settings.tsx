@@ -26,6 +26,7 @@ import {
   useAppLanguage,
 } from "../../context/LanguageContext";
 import { detachCustomerFromDevice } from "../../services/pushNotifications";
+import { fetchLoyalty, levelIcon, type LoyaltyResponse } from "../../services/loyaltyApi";
 /*
 |--------------------------------------------------------------------------
 | COLORS
@@ -109,6 +110,13 @@ export default function SettingsScreen() {
       if (!signal?.aborted && currentRequest === requestId.current) setLoading(false);
     }
   }, [isArabic]);
+  /*
+   * Loyalty points of all the pets (card under the profile).
+   */
+  const [loyalty, setLoyalty] = useState<LoyaltyResponse | null>(null);
+  useFocusEffect(useCallback(() => {
+    fetchLoyalty(isArabic ? "ar" : "en").then(setLoyalty).catch(() => undefined);
+  }, [isArabic]));
   useFocusEffect(useCallback(() => {
     const controller = new AbortController();
     void loadAccount(controller.signal);
@@ -134,6 +142,36 @@ export default function SettingsScreen() {
   | Replace the Alerts/routes as the corresponding pages are implemented.
   |
   */
+  /*
+   * Points card: total, best level, the most useful line
+   * (points usable now > points to keep > how many are missing).
+   */
+  const loyaltyOn = !!loyalty?.program?.enabled;
+  const loyaltyPets = loyalty?.pets ?? [];
+  const totalPoints = loyalty?.total_points ?? 0;
+  const pointsCurrency = loyalty?.program?.currency ?? "KWD";
+  const bestLevel = loyaltyPets
+    .map(item => item.level)
+    .filter(Boolean)
+    .sort((a: any, b: any) => b.min_points - a.min_points)[0] ?? null;
+  const usablePet = [...loyaltyPets].sort((a, b) => b.usable_points - a.usable_points).find(item => item.usable_points > 0) ?? null;
+  const expiringPet = loyaltyPets.find(item => item.balance > 0 && item.days_left !== null && item.days_left >= 0 && item.days_left <= 7) ?? null;
+  const closestPet = [...loyaltyPets].filter(item => item.balance > 0).sort((a, b) => a.missing_points - b.missing_points)[0] ?? null;
+  const pointsLine = expiringPet
+    ? (isArabic
+        ? `نقاط ${expiringPet.pet.name} تنتهي خلال ${expiringPet.days_left} يوم`
+        : `${expiringPet.pet.name}'s points expire in ${expiringPet.days_left} day${expiringPet.days_left === 1 ? "" : "s"}`)
+    : usablePet
+      ? (isArabic
+          ? `${usablePet.pet.name}: ${usablePet.usable_points} نقطة = خصم ${usablePet.usable_discount.toFixed(3)} ${pointsCurrency}`
+          : `${usablePet.pet.name}: ${usablePet.usable_points} pts = ${usablePet.usable_discount.toFixed(3)} ${pointsCurrency} off`)
+      : closestPet
+        ? (isArabic
+            ? `${closestPet.missing_points} نقطة أخرى لـ ${closestPet.pet.name} لاستخدامها`
+            : `${closestPet.missing_points} more points for ${closestPet.pet.name} to use them`)
+        : (isArabic
+            ? "اكسب نقاطاً مع كل باقة واحصل على خصومات"
+            : "Earn points with every pack and get discounts");
   const comingSoon = (
     title: string
   ) => {
@@ -326,78 +364,81 @@ export default function SettingsScreen() {
         />
         {/*
         |--------------------------------------------------------------------------
-        | INVITE FRIENDS
+        | LOYALTY POINTS (instead of "Invite friends")
         |--------------------------------------------------------------------------
         */}
-        <Pressable
-          style={[
-            styles.inviteCard,
-            isArabic &&
-              styles.rowReverse,
-          ]}
-          onPress={() =>
-            comingSoon(
-              "Invite Friends"
-            )
-          }
-        >
-          <View
-            style={
-              styles.inviteIcon
-            }
+        {loyaltyOn && (
+          <Pressable
+            style={({ pressed }) => [
+              styles.inviteCard,
+              styles.pointsCard,
+              !!expiringPet && styles.pointsCardDanger,
+              !expiringPet && !!usablePet && styles.pointsCardUsable,
+              isArabic && styles.rowReverse,
+              pressed && { opacity: 0.88 },
+            ]}
+            onPress={() => router.push("/loyalty" as any)}
           >
-            <MaterialCommunityIcons
-              name="paw"
-              size={36}
-              color={
-                COLORS.primary
+            <View
+              style={[
+                styles.pointsIcon,
+                { backgroundColor: bestLevel?.color ?? COLORS.gold },
+              ]}
+            >
+              <MaterialCommunityIcons
+                name={(bestLevel ? levelIcon(bestLevel.icon) : "star") as any}
+                size={26}
+                color="#FFFFFF"
+              />
+            </View>
+            <View style={styles.inviteContent}>
+              <Text
+                style={[
+                  styles.inviteTitle,
+                  isArabic && styles.textRight,
+                ]}
+              >
+                {isArabic ? "نقاط الولاء" : "Loyalty points"}
+                {"  "}
+                <Text style={styles.pointsTotal}>
+                  {totalPoints} {isArabic ? "نقطة" : "pts"}
+                </Text>
+              </Text>
+              {!!bestLevel && (
+                <Text
+                  style={[
+                    styles.pointsLevel,
+                    { color: bestLevel.color },
+                    isArabic && styles.textRight,
+                  ]}
+                >
+                  {bestLevel.name}
+                </Text>
+              )}
+              <Text
+                numberOfLines={2}
+                style={[
+                  styles.inviteDescription,
+                  !!expiringPet && styles.pointsLineDanger,
+                  !expiringPet && !!usablePet && styles.pointsLineUsable,
+                  isArabic && styles.textRight,
+                ]}
+              >
+                {pointsLine}
+              </Text>
+            </View>
+            <Ionicons
+              name={
+                isArabic
+                  ? "arrow-back-outline"
+                  : "arrow-forward-outline"
               }
+              size={20}
+              color={COLORS.primary}
             />
-          </View>
-          <View
-            style={
-              styles.inviteContent
-            }
-          >
-            <Text
-              style={[
-                styles.inviteTitle,
-                isArabic &&
-                  styles.textRight,
-              ]}
-            >
-              {
-                isArabic
-                  ? "ادعُ أصدقاءك واكسب المكافآت"
-                  : "Invite Friends & Earn Rewards"
-              }
-            </Text>
-            <Text
-              style={[
-                styles.inviteDescription,
-                isArabic &&
-                  styles.textRight,
-              ]}
-            >
-              {
-                isArabic
-                  ? "امنح 30 درهماً خصماً، واكسب 150 نقطة"
-                  : "Give 30 AED off, earn 150 points"
-              }
-            </Text>
-          </View>
-          <Ionicons
-            name={
-              isArabic
-                ? "arrow-back-outline"
-                : "arrow-forward-outline"
-            }
-            size={20}
-            color={
-              COLORS.primary
-            }
-          />
-        </Pressable>
+          </Pressable>
+        )}
+        {!loyaltyOn && <View style={styles.pointsSpacer} />}
         {/*
         |--------------------------------------------------------------------------
         | MENU
@@ -902,6 +943,49 @@ const styles =
       lineHeight: 19,
       color:
         COLORS.muted,
+    },
+    pointsCard: {
+      borderWidth: 1,
+      borderColor: "#E8C66A",
+      backgroundColor: "#FFF8E5",
+      borderRadius: 10,
+      paddingVertical: 14,
+    },
+    pointsCardUsable: {
+      borderColor: "#86C9A0",
+      backgroundColor: "#F1FAF4",
+    },
+    pointsCardDanger: {
+      borderColor: "#F0A8A0",
+      backgroundColor: "#FDECEA",
+    },
+    pointsIcon: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    pointsTotal: {
+      fontFamily: "Cairo_800ExtraBold",
+      fontSize: 15,
+      color: "#9A6B00",
+    },
+    pointsLevel: {
+      fontFamily: "Cairo_600SemiBold",
+      fontSize: 12,
+      lineHeight: 18,
+    },
+    pointsLineUsable: {
+      fontFamily: "Cairo_600SemiBold",
+      color: "#15803D",
+    },
+    pointsLineDanger: {
+      fontFamily: "Cairo_600SemiBold",
+      color: "#B42318",
+    },
+    pointsSpacer: {
+      height: 30,
     },
     /*
     |--------------------------------------------------------------------------

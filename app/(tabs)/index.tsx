@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -37,10 +37,13 @@ import type {
   PurchaseSummary,
 } from '../../types/purchase';
 import TrialOfferCard from '../../components/purchase/TrialOfferCard';
+import PlanReminderBanner from '../../components/purchase/PlanReminderBanner';
 import {
   formatDate,
 } from '../../components/purchase/purchaseUtils';
 import ShopCatalog from "../../components/shop/ShopCatalog";
+import LoyaltyBanner from "../../components/loyalty/LoyaltyBanner";
+import { fetchLoyalty, levelIcon, type LoyaltyResponse } from "../../services/loyaltyApi";
 const COLORS = {
   background: '#F7F4EF',
   primary: '#249B97',
@@ -220,6 +223,91 @@ export default function HomeScreen() {
       void loadCatalog();
     }, [loadCatalog])
   );
+  /*
+   * Notifications of the customer (Recent updates, last ones first).
+   */
+  const [
+    notifications,
+    setNotifications,
+  ] = useState<any[]>([]);
+  const loadNotifications =
+    useCallback(async () => {
+      if (isGuest) {
+        setNotifications([]);
+        return;
+      }
+      try {
+        const token = await getStoredItem('access_token');
+        if (!token) {
+          return;
+        }
+        const response = await fetch(
+          'https://animal-care2.kharbouch-soufiane.com/api/mobile/notifications',
+          {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              access_token: token,
+              lang: isArabic ? 'ar' : 'en',
+            }),
+          }
+        );
+        const data = await response.json();
+        if (response.ok && Array.isArray(data?.notifications)) {
+          setNotifications(data.notifications);
+        }
+      } catch (notificationError) {
+        console.error('Unable to load notifications:', notificationError);
+      }
+    }, [isArabic, isGuest]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadNotifications();
+    }, [loadNotifications])
+  );
+  /*
+   * Loyalty points (per pet): total, badge of each pet, bottom banner.
+   */
+  const [
+    loyalty,
+    setLoyalty,
+  ] = useState<LoyaltyResponse | null>(null);
+  const loadLoyalty =
+    useCallback(async () => {
+      if (isGuest) {
+        setLoyalty(null);
+        return;
+      }
+      try {
+        setLoyalty(await fetchLoyalty(isArabic ? 'ar' : 'en'));
+      } catch (loyaltyError) {
+        console.warn('Unable to load loyalty points:', loyaltyError);
+      }
+    }, [isArabic, isGuest]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadLoyalty();
+    }, [loadLoyalty])
+  );
+  const loyaltyOn = !!loyalty?.program?.enabled;
+  const petLoyalty = (pet: any) =>
+    loyalty?.pets.find(item => Number(item.pet.id) === Number(pet?.id)) ?? null;
+  // Best level of the customer's pets (shown with his total)
+  const bestLevel = useMemo(
+    () =>
+      (loyalty?.pets ?? [])
+        .map(item => item.level)
+        .filter(Boolean)
+        .sort((a: any, b: any) => b.min_points - a.min_points)[0] ?? null,
+    [loyalty]
+  );
+  const openLoyalty = () => {
+    router.push('/loyalty' as any);
+  };
   const trialOffers = useMemo(
     () =>
       catalog
@@ -238,7 +326,31 @@ export default function HomeScreen() {
     void loadPurchases();
     void loadAddresses();
     void loadCatalog();
+    void loadNotifications();
+    void loadLoyalty();
   };
+
+  /*
+   * Each time the Home page is opened again (back from planning,
+   * checkout, pet...): customer data (pets, orders) reloaded too.
+   * The first opening is already loaded by the context.
+   */
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  const firstFocus = useRef(true);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (firstFocus.current) {
+        firstFocus.current = false;
+        return;
+      }
+
+      if (!isGuest) {
+        void refreshRef.current();
+      }
+    }, [isGuest])
+  );
   const t = isArabic
     ? {
         welcomeBack: 'مرحباً بعودتك،',
@@ -267,7 +379,6 @@ export default function HomeScreen() {
         notes: 'ملاحظات',
         deliveryTime: 'وقت التوصيل',
         manageDelivery: 'إدارة التوصيل',
-        skipDate: 'تخطي التاريخ',
         yourPets: 'حيواناتك الأليفة',
         noPetsTitle: 'لا توجد حيوانات أليفة بعد',
         noPetsText: 'أضف حيوانك الأليف لاختيار باقة وجباته الطازجة.',
@@ -296,10 +407,28 @@ export default function HomeScreen() {
           'وجبات مجدولة للتوصيل',
         transitionUpdate:
           'تقدم مرحلة الانتقال',
-        twoHoursAgo: 'منذ ساعتين',
+        noUpdates: 'لا توجد تحديثات بعد.',
+        justNow: 'الآن',
+        minutesAgo: (n: number) => `منذ ${n} د`,
+        hoursAgo: (n: number) => `منذ ${n} س`,
         yesterday: 'أمس',
+        upConfirmed: (pet: string) => `تم تأكيد طلبك${pet ? ` لـ ${pet}` : ''}`,
+        upConfirmedBody: (pack: string) => `${pack} · تم الدفع`,
+        upToPlan: (pet: string) => `اختر أيام التوصيل${pet ? ` لـ ${pet}` : ''}`,
+        upToPlanBody: (n: number) => `${n} وجبة بانتظار جدولتها.`,
+        upPremium: (pet: string) => `باقة مخصصة${pet ? ` لـ ${pet}` : ''} قيد التحضير`,
+        upPremiumBody: 'سيتواصل معك فريق التغذية لاختيار الوصفات.',
+        upPlanned: (pet: string) => `تمت جدولة توصيل${pet ? ` لـ ${pet}` : ''}`,
+        upPrepared: (pet: string) => `يتم تحضير وجبات${pet ? ` ${pet}` : ''}`,
+        upDelivered: (pet: string) => `تم توصيل وجبات${pet ? ` ${pet}` : ''}`,
+        upDeliveryBody: (n: number, date: string) => `${n} وجبة · ${date}`,
+        deliveryOn: (date: string) => `التوصيل ${date}`,
         loadError:
           'تعذر تحميل بيانات الحساب',
+        shopEyebrow: 'ابدأ من هنا',
+        shopTitle: 'وجبات طازجة لقطتك أو كلبك',
+        shopText: 'اكتشف باقات التذوق والاشتراك، واختر عمر حيوانك عند الطلب.',
+        shopButton: 'تسوّق باقاتنا',
       }
     : {
         welcomeBack: 'Welcome back,',
@@ -328,7 +457,6 @@ export default function HomeScreen() {
         notes: 'Notes',
         deliveryTime: 'Delivery time',
         manageDelivery: 'Manage Delivery',
-        skipDate: 'Skip Date',
         yourPets: 'Your Pets',
         noPetsTitle: 'No pets yet',
         noPetsText: 'Add your pet to choose their fresh meal plan.',
@@ -357,10 +485,28 @@ export default function HomeScreen() {
           'meals scheduled for delivery',
         transitionUpdate:
           'Transition Milestone Progress',
-        twoHoursAgo: '2 hours ago',
+        noUpdates: 'No updates yet.',
+        justNow: 'Just now',
+        minutesAgo: (n: number) => `${n} min ago`,
+        hoursAgo: (n: number) => `${n} h ago`,
         yesterday: 'Yesterday',
+        upConfirmed: (pet: string) => `Order confirmed${pet ? ` for ${pet}` : ''}`,
+        upConfirmedBody: (pack: string) => `${pack} · payment received`,
+        upToPlan: (pet: string) => `Choose the delivery days${pet ? ` for ${pet}` : ''}`,
+        upToPlanBody: (n: number) => `${n} meals waiting to be planned.`,
+        upPremium: (pet: string) => `${pet ? `${pet}'s` : 'Your'} personalized pack is being prepared`,
+        upPremiumBody: 'Our nutrition team will contact you to choose the recipes.',
+        upPlanned: (pet: string) => `Delivery planned${pet ? ` for ${pet}` : ''}`,
+        upPrepared: (pet: string) => `${pet ? `${pet}'s` : 'Your'} meals are being prepared`,
+        upDelivered: (pet: string) => `${pet ? `${pet}'s` : 'Your'} meals were delivered`,
+        upDeliveryBody: (n: number, date: string) => `${n} meals · ${date}`,
+        deliveryOn: (date: string) => `Delivery ${date}`,
         loadError:
           'Unable to load account data',
+        shopEyebrow: 'START HERE',
+        shopTitle: 'Fresh meals for your cat or dog',
+        shopText: 'Discover our taste packs and plans, pick your pet’s age at checkout.',
+        shopButton: 'Shop our plans',
       };
   const pets =
     subscription?.animals || [];
@@ -399,12 +545,99 @@ export default function HomeScreen() {
           return dateA - dateB;
         });
     }, [orders]);
-  const nextOrder =
-    upcomingOrders.length > 0
-      ? upcomingOrders[0]
-      : null;
+  /*
+   * UPCOMING DELIVERIES: the next delivery of EACH pet
+   * (pack deliveries + old back-office orders), earliest first.
+   * Several pets: one chip per pet in the widget.
+   */
+  const upcomingByPet = useMemo(() => {
+    const byKey = new Map<string, any>();
+
+    const keep = (key: string, order: any) => {
+      const current = byKey.get(key);
+      if (!current || String(order.scheduled_for) < String(current.scheduled_for)) {
+        byKey.set(key, order);
+      }
+    };
+
+    // Packs (new system)
+    purchases.forEach(purchase => {
+      const delivery = purchase.next_delivery;
+      if (!delivery || delivery.status === 'cancelled' || delivery.status === 'delivered') {
+        return;
+      }
+      const animalId = purchase.animal?.id ?? null;
+      keep(animalId ? `pet-${animalId}` : `purchase-${purchase.id}`, {
+        id: delivery.id,
+        purchase_id: purchase.id,
+        delivery_id: delivery.id,
+        scheduled_for: delivery.date,
+        delivery_slot: delivery.delivery_slot ?? null,
+        items: delivery.items,
+        address: delivery.address ?? null,
+        animal_id: animalId,
+        is_editable: delivery.is_editable,
+      });
+    });
+
+    // Old back-office orders
+    upcomingOrders.forEach((order: any) => {
+      if (!order?.scheduled_for) {
+        return;
+      }
+      const animalId = order.animal_id ?? order.animal?.id ?? null;
+      keep(animalId ? `pet-${animalId}` : `order-${order.id}`, order);
+    });
+
+    return Array.from(byKey.entries())
+      .map(([key, order]) => ({
+        key,
+        order,
+        pet:
+          pets.find((pet: any) => Number(pet.id) === Number(order.animal_id ?? order.animal?.id)) ||
+          null,
+      }))
+      .sort((a, b) => String(a.order.scheduled_for).localeCompare(String(b.order.scheduled_for)));
+  }, [purchases, upcomingOrders, pets]);
+
+  // Pet shown in the widget (the earliest delivery by default)
+  const [
+    upcomingKey,
+    setUpcomingKey,
+  ] = useState<string | null>(null);
+
+  const selectedUpcoming =
+    upcomingByPet.find(item => item.key === upcomingKey) ??
+    upcomingByPet[0] ??
+    null;
+
+  const nextOrder = selectedUpcoming?.order ?? null;
+
+  /*
+   * "Manage Delivery": the delivery of the pack -> its management page,
+   * otherwise the deliveries page.
+   */
+  const openManageDelivery = () => {
+    const order = nextOrder as any;
+
+    if (order?.purchase_id && order?.delivery_id) {
+      router.push({
+        pathname: '/manage-delivery',
+        params: {
+          purchaseId: String(order.purchase_id),
+          deliveryId: String(order.delivery_id),
+        },
+      } as any);
+      return;
+    }
+
+    router.push('/orders' as any);
+  };
   const nextPet =
     useMemo(() => {
+      if (selectedUpcoming?.pet) {
+        return selectedUpcoming.pet;
+      }
       if (!nextOrder) {
         return pets[0] || null;
       }
@@ -423,7 +656,7 @@ export default function HomeScreen() {
         );
       }
       return pets[0] || null;
-    }, [nextOrder, pets]);
+    }, [nextOrder, pets, selectedUpcoming]);
   const mealCount =
     useMemo(() => {
       if (!nextOrder) {
@@ -686,7 +919,11 @@ export default function HomeScreen() {
     router.push('/pets' as any);
   };
   const openAddPet = () => {
-    router.push('/pet-form' as any);
+    router.push({ pathname: '/pet-form', params: { id: '' } } as any);
+  };
+  // Signed in without pets: the shop (catalog + checkout creates the pet)
+  const openShop = () => {
+    router.push('/shop' as any);
   };
   const openNotifications = () => {
     router.push('/notifications' as any);
@@ -705,14 +942,163 @@ export default function HomeScreen() {
     } as any);
   };
   /*
+   * RECENT UPDATES (all pets): notifications + pack events
+   * (order confirmed, to plan, planned, prepared, delivered).
+   * The 5 most recent, newest first.
+   */
+  const timeAgo = (time: number): string => {
+    const diff = Date.now() - time;
+    if (diff < 60 * 1000) return t.justNow;
+    if (diff < 3600 * 1000) return t.minutesAgo(Math.floor(diff / 60000));
+    if (diff < 24 * 3600 * 1000) return t.hoursAgo(Math.floor(diff / 3600000));
+    if (diff < 48 * 3600 * 1000) return t.yesterday;
+    return new Intl.DateTimeFormat(isArabic ? 'ar' : 'en', { day: 'numeric', month: 'short' }).format(new Date(time));
+  };
+
+  const parseTime = (value?: string | null): number | null => {
+    if (!value) return null;
+    const time = new Date(String(value).replace(' ', 'T')).getTime();
+    return Number.isNaN(time) ? null : time;
+  };
+
+  const recentUpdates = useMemo(() => {
+    type Update = {
+      key: string;
+      time: number;
+      timeLabel?: string;
+      title: string;
+      body: string;
+      icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'];
+      onPress?: () => void;
+    };
+
+    const list: Update[] = [];
+    const now = Date.now();
+    const packDeliveryKeys = new Set<string>();
+
+    // Notifications
+    notifications.forEach((item: any) => {
+      const time = parseTime(item.sent_at) ?? parseTime(item.created_at);
+      if (!time) return;
+      list.push({
+        key: `notif-${item.id}`,
+        time,
+        title: String(item.title || ''),
+        body: String(item.body || ''),
+        icon: item.viewed_at ? 'bell-outline' : 'bell-ring-outline',
+        onPress: openNotifications,
+      });
+    });
+
+    // Packs
+    purchases.forEach(purchase => {
+      const p = purchase as any;
+      const pet = purchase.animal?.name ?? '';
+      const paidAt = parseTime(p.payment?.paid_at) ?? parseTime(p.period?.purchased_at);
+
+      if (purchase.is_active && paidAt) {
+        list.push({
+          key: `paid-${purchase.id}`,
+          time: paidAt,
+          title: t.upConfirmed(pet),
+          body: t.upConfirmedBody(String(p.product?.name ?? '')),
+          icon: 'check-decagram-outline',
+        });
+      }
+
+      // Current state of the pack (shown as the latest event)
+      if (purchase.is_active && p.needs_consultation) {
+        list.push({
+          key: `premium-${purchase.id}`,
+          time: now - 1000,
+          timeLabel: t.justNow,
+          title: t.upPremium(pet),
+          body: t.upPremiumBody,
+          icon: 'crown-outline',
+        });
+      } else if (purchase.is_active && (purchase.usage?.remaining_recipes ?? 0) > 0 && !purchase.next_delivery) {
+        list.push({
+          key: `toplan-${purchase.id}`,
+          time: now - 2000,
+          timeLabel: t.justNow,
+          title: t.upToPlan(pet),
+          body: t.upToPlanBody(purchase.usage.remaining_recipes),
+          icon: 'calendar-plus',
+          onPress: () =>
+            router.push({ pathname: '/distribute-package', params: { id: String(purchase.id) } } as any),
+        });
+      }
+
+      const delivery = purchase.next_delivery as any;
+      if (purchase.is_active && delivery && delivery.status !== 'cancelled') {
+        const meals = (delivery.items || []).reduce((sum: number, item: any) => sum + Number(item?.quantity || 0), 0);
+        const prepared = delivery.status === 'prepared';
+        packDeliveryKeys.add(`${purchase.animal?.id ?? ''}-${delivery.date}`);
+
+        list.push({
+          key: `delivery-${delivery.id}`,
+          time: now - (prepared ? 500 : 3000),
+          timeLabel: t.deliveryOn(formatShortDate(delivery.date)),
+          title: prepared ? t.upPrepared(pet) : t.upPlanned(pet),
+          body: t.upDeliveryBody(meals, formatShortDate(delivery.date)),
+          icon: prepared ? 'chef-hat' : 'calendar-check-outline',
+          onPress: () =>
+            router.push({
+              pathname: '/manage-delivery',
+              params: { purchaseId: String(purchase.id), deliveryId: String(delivery.id) },
+            } as any),
+        });
+      }
+    });
+
+    // Orders of the subscription (prepared / delivered), not already shown by a pack
+    orders.forEach((order: any) => {
+      const status = String(order.dashboard_status || order.status || '').toLowerCase();
+      const animalId = order.animal_id ?? order.animal?.id ?? '';
+      if (!order.scheduled_for || packDeliveryKeys.has(`${animalId}-${order.scheduled_for}`)) return;
+      if (status !== 'prepared' && status !== 'delivered') return;
+
+      const time =
+        parseTime(status === 'delivered' ? order.delivered_at : order.prepared_at) ??
+        parseTime(`${order.scheduled_for}T09:00:00`);
+      if (!time || time > now) return;
+
+      const pet = pets.find((item: any) => Number(item.id) === Number(animalId))?.name ?? '';
+      const meals = (order.items || []).reduce((sum: number, item: any) => sum + Number(item?.quantity || 0), 0);
+
+      list.push({
+        key: `order-${order.id}`,
+        time,
+        title: status === 'delivered' ? t.upDelivered(pet) : t.upPrepared(pet),
+        body: t.upDeliveryBody(meals, formatShortDate(order.scheduled_for)),
+        icon: status === 'delivered' ? 'truck-check-outline' : 'chef-hat',
+      });
+    });
+
+    return list.sort((a, b) => b.time - a.time).slice(0, 5);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notifications, purchases, orders, pets, isArabic]);
+
+  /*
    * 1 or 2 pets: cards share the screen width.
    * 3 pets or more: horizontal scrolling.
    */
   const fitPets =
     pets.length > 0 &&
     pets.length <= 2;
+  /*
+   * Premium pet: a PREMIUM-... pack paid / running (API flag is_personalized).
+   */
+  const petIsPremium = (pet: any) =>
+    purchases.some(
+      purchase =>
+        Number(purchase.animal?.id) === Number(pet?.id) &&
+        purchase.is_active &&
+        !!(purchase as any).is_personalized
+    );
   const renderPetCard = (pet: any) => {
     const active = petIsActive(pet);
+    const premium = petIsPremium(pet);
     const pending = petIsPending(pet);
     const plan = planFor(pet);
     const date = petNextDate(pet);
@@ -742,6 +1128,7 @@ export default function HomeScreen() {
           styles.petImage,
           fitPets && styles.petImageFit,
           single && styles.petImageSingle,
+          premium && styles.petImagePremium,
         ]}
       >
         {pet.photo_url ? (
@@ -755,6 +1142,20 @@ export default function HomeScreen() {
             size={single ? 56 : 46}
             color={COLORS.primary}
           />
+        )}
+
+        {/* Premium: badge on the photo (cards stay aligned) */}
+        {premium && (
+          <View style={styles.premiumBadge}>
+            <MaterialCommunityIcons
+              name="crown"
+              size={11}
+              color="#FFFFFF"
+            />
+            <Text style={styles.premiumBadgeText}>
+              {isArabic ? 'بريميوم' : 'Premium'}
+            </Text>
+          </View>
         )}
       </View>
     );
@@ -869,6 +1270,9 @@ export default function HomeScreen() {
       </Pressable>
     ) : null;
 
+    // Loyalty points of the pet (green: usable now)
+    const points = loyaltyOn ? petLoyalty(pet) : null;
+
     return (
       <Pressable
         key={String(pet.id)}
@@ -878,6 +1282,31 @@ export default function HomeScreen() {
         ]}
         onPress={() => openPet(pet)}
       >
+        {!!points && points.balance > 0 && (
+          <Pressable
+            onPress={openLoyalty}
+            hitSlop={6}
+            style={[
+              styles.petPoints,
+              isArabic ? styles.petPointsRtl : null,
+              points.usable_points > 0 && styles.petPointsUsable,
+            ]}
+          >
+            <MaterialCommunityIcons
+              name={(points.level ? levelIcon(points.level.icon) : 'star') as any}
+              size={12}
+              color={points.usable_points > 0 ? '#FFFFFF' : '#9A6B00'}
+            />
+            <Text
+              style={[
+                styles.petPointsText,
+                points.usable_points > 0 && styles.petPointsTextUsable,
+              ]}
+            >
+              {points.balance}
+            </Text>
+          </Pressable>
+        )}
         {single ? (
           <View
             style={[
@@ -985,6 +1414,24 @@ export default function HomeScreen() {
             >
               {fullName || '—'}
             </Text>
+            {/* Loyalty points of all the pets */}
+            {loyaltyOn && pets.length > 0 && (
+              <Pressable
+                onPress={openLoyalty}
+                hitSlop={6}
+                style={[
+                  styles.pointsTotal,
+                  isArabic && styles.pointsTotalRtl,
+                ]}
+              >
+                <Ionicons name="star" size={14} color="#D4A017" />
+                <Text style={styles.pointsTotalText}>
+                  {loyalty?.total_points ?? 0} {isArabic ? 'نقطة' : 'points'}
+                  {bestLevel ? ` · ${bestLevel.name}` : ''}
+                </Text>
+                <Ionicons name={isArabic ? 'chevron-back' : 'chevron-forward'} size={14} color="#9A6B00" />
+              </Pressable>
+            )}
           </View>
         </View>
         {!!error && (
@@ -1004,6 +1451,39 @@ export default function HomeScreen() {
             </Text>
           </View>
         )}
+        {/*
+         * NO PET YET: always a way to start shopping, at the top
+         */}
+        {pets.length === 0 && (
+          <View style={styles.shopCard}>
+            <Text style={[styles.shopEyebrow, isArabic && styles.textRtl]}>{t.shopEyebrow}</Text>
+            <Text style={[styles.shopTitle, isArabic && styles.textRtl]}>{t.shopTitle}</Text>
+            <Text style={[styles.shopText, isArabic && styles.textRtl]}>{t.shopText}</Text>
+            <Pressable
+              onPress={openShop}
+              style={({ pressed }) => [
+                styles.shopButton,
+                isArabic && styles.rowRtl,
+                pressed && styles.addPetButtonPressed,
+              ]}
+            >
+              <Ionicons name="basket-outline" size={22} color="#FFFFFF" />
+              <Text style={styles.shopButtonText}>{t.shopButton}</Text>
+            </Pressable>
+          </View>
+        )}
+        {/*
+         * PLAN REMINDER: paid packs with meals not planned yet
+         * (taste pack: choose the day / other packs: plan the deliveries)
+         */}
+        <PlanReminderBanner
+          purchases={purchases}
+          isArabic={isArabic}
+          onPlanned={() => {
+            void loadPurchases();
+            void refresh();
+          }}
+        />
         {/*
          * TRIAL OFFER: live countdown until the end of the pet's trial
          */}
@@ -1042,6 +1522,7 @@ export default function HomeScreen() {
               >
                 {t.upcomingDelivery}
               </Text>
+              {upcomingByPet.length <= 1 && (
               <Pressable
                 style={[
                   styles.petMiniLink,
@@ -1073,7 +1554,73 @@ export default function HomeScreen() {
                     ''}
                 </Text>
               </Pressable>
+              )}
             </View>
+            {/* Several pets with an upcoming delivery: one chip each */}
+            {upcomingByPet.length > 1 && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={[
+                  styles.upcomingChips,
+                  isArabic && styles.rowRtl,
+                ]}
+                style={styles.upcomingChipsScroll}
+              >
+                {upcomingByPet.map(item => {
+                  const selected = item.key === selectedUpcoming?.key;
+                  const isDogPet = String(item.pet?.species || '').toLowerCase() === 'dog';
+
+                  return (
+                    <Pressable
+                      key={item.key}
+                      onPress={() => {
+                        setUpcomingKey(item.key);
+                        setAddressInfoVisible(false);
+                      }}
+                      style={[
+                        styles.upcomingChip,
+                        selected && styles.upcomingChipActive,
+                        isArabic && styles.rowRtl,
+                      ]}
+                    >
+                      {item.pet?.photo_url ? (
+                        <Image
+                          source={{ uri: item.pet.photo_url }}
+                          style={styles.upcomingChipPhoto}
+                        />
+                      ) : (
+                        <MaterialCommunityIcons
+                          name={isDogPet ? 'dog' : 'cat'}
+                          size={16}
+                          color={selected ? COLORS.white : COLORS.primary}
+                        />
+                      )}
+                      <View>
+                        <Text
+                          numberOfLines={1}
+                          style={[
+                            styles.upcomingChipName,
+                            selected && styles.upcomingChipTextActive,
+                          ]}
+                        >
+                          {item.pet?.name || '—'}
+                        </Text>
+                        <Text
+                          numberOfLines={1}
+                          style={[
+                            styles.upcomingChipDate,
+                            selected && styles.upcomingChipTextActive,
+                          ]}
+                        >
+                          {formatShortDate(item.order.scheduled_for)}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
             <View
               style={[
                 styles.deliveryMain,
@@ -1314,9 +1861,11 @@ export default function HomeScreen() {
               ]}
             >
               <Pressable
-                style={
-                  styles.manageButton
-                }
+                onPress={openManageDelivery}
+                style={({ pressed }) => [
+                  styles.manageButton,
+                  pressed && styles.addPetButtonPressed,
+                ]}
               >
                 <Ionicons
                   name={
@@ -1333,20 +1882,6 @@ export default function HomeScreen() {
                   }
                 >
                   {t.manageDelivery}
-                </Text>
-              </Pressable>
-              <Pressable
-                style={
-                  styles.skipButton
-                }
-                disabled
-              >
-                <Text
-                  style={
-                    styles.skipText
-                  }
-                >
-                  {t.skipDate}
                 </Text>
               </Pressable>
             </View>
@@ -1428,6 +1963,10 @@ export default function HomeScreen() {
                 <Text style={styles.addPetButtonText}>
                   {t.addNewPet}
                 </Text>
+              </Pressable>
+              <Pressable onPress={openShop} hitSlop={8} style={[styles.noPetsShopLink, isArabic && styles.rowRtl]}>
+                <Ionicons name="basket-outline" size={18} color={COLORS.primary} />
+                <Text style={styles.noPetsShopText}>{t.shopButton}</Text>
               </Pressable>
             </View>
           ) : (
@@ -1550,31 +2089,27 @@ export default function HomeScreen() {
               </Text>
             </Pressable>
           </View>
-          {nextOrder && (
-            <UpdateRow
-              icon="truck-outline"
-              title={`${t.updateDeliveryTitle} ${nextPet?.name || ''}`}
-              body={`${mealCount || '—'} ${t.updateDeliveryBody} ${formatIsoDate((nextOrder as any).scheduled_for)}${deliveryAddress ? ` to ${String(deliveryAddress)}` : ''}.`}
-              time={t.twoHoursAgo}
-              isArabic={isArabic}
-            />
-          )}
-          {pets.length > 1 && (
-            <UpdateRow
-              customIcon="creation-outline"
-              title={`${pets[1]?.name || ''}’s ${t.transitionUpdate}`}
-              body={
-                isArabic
-                  ? 'تابع دليل الانتقال ونصائح التغذية الخاصة بحيوانك.'
-                  : 'Check your guided feeding tips and fresh-food transition progress.'
-              }
-              time={t.yesterday}
-              isArabic={isArabic}
-              last
-            />
+          {recentUpdates.length === 0 ? (
+            <Text style={[styles.updateBody, isArabic && styles.textRtl]}>{t.noUpdates}</Text>
+          ) : (
+            recentUpdates.map((update, index) => (
+              <UpdateRow
+                key={update.key}
+                customIcon={update.icon}
+                title={update.title}
+                body={update.body}
+                time={update.timeLabel ?? timeAgo(update.time)}
+                isArabic={isArabic}
+                onPress={update.onPress}
+                first={index === 0}
+              />
+            ))
           )}
         </View>
       </ScrollView>
+
+      {/* From time to time: points usable / lost soon */}
+      <LoyaltyBanner data={loyalty} isArabic={isArabic} />
     </SafeAreaView>
   );
 }
@@ -1585,7 +2120,8 @@ function UpdateRow({
   body,
   time,
   isArabic,
-  last = false,
+  first = false,
+  onPress,
 }: {
   icon?: React.ComponentProps<
     typeof Ionicons
@@ -1597,13 +2133,16 @@ function UpdateRow({
   body: string;
   time: string;
   isArabic: boolean;
-  last?: boolean;
+  first?: boolean;
+  onPress?: () => void;
 }) {
   return (
     <Pressable
+      onPress={onPress}
+      disabled={!onPress}
       style={[
         styles.updateRow,
-        !last &&
+        !first &&
           styles.updateBorder,
       ]}
     >
@@ -1670,15 +2209,17 @@ function UpdateRow({
             {time}
           </Text>
         </View>
-        <Ionicons
-          name={
-            isArabic
-              ? 'arrow-back'
-              : 'arrow-forward'
-          }
-          size={18}
-          color={COLORS.muted}
-        />
+        {!!onPress && (
+          <Ionicons
+            name={
+              isArabic
+                ? 'arrow-back'
+                : 'arrow-forward'
+            }
+            size={18}
+            color={COLORS.muted}
+          />
+        )}
       </View>
     </Pressable>
   );
@@ -1729,6 +2270,60 @@ const styles =
       fontSize: 31,
       lineHeight: 41,
       color: COLORS.text,
+    },
+    shopCard: {
+      padding: 18,
+      marginBottom: 28,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: '#B7DAD4',
+      backgroundColor: '#E8F2EF',
+    },
+    shopEyebrow: {
+      fontFamily: 'Cairo_700Bold',
+      fontSize: 11,
+      letterSpacing: 1.5,
+      color: COLORS.primary,
+    },
+    shopTitle: {
+      marginTop: 4,
+      fontFamily: 'Cairo_800ExtraBold',
+      fontSize: 22,
+      lineHeight: 31,
+      color: COLORS.text,
+    },
+    shopText: {
+      marginTop: 4,
+      fontFamily: 'Cairo_400Regular',
+      fontSize: 14,
+      lineHeight: 22,
+      color: COLORS.muted,
+    },
+    shopButton: {
+      minHeight: 54,
+      marginTop: 16,
+      borderRadius: 10,
+      backgroundColor: COLORS.dark,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 10,
+    },
+    shopButtonText: {
+      fontFamily: 'Cairo_700Bold',
+      fontSize: 15,
+      color: '#FFFFFF',
+    },
+    noPetsShopLink: {
+      marginTop: 14,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    noPetsShopText: {
+      fontFamily: 'Cairo_700Bold',
+      fontSize: 14,
+      color: COLORS.primary,
     },
     errorBox: {
       flexDirection: 'row',
@@ -1866,25 +2461,25 @@ const styles =
       textAlign: 'center',
     },
     deliveryCard: {
-      paddingHorizontal: 22,
-      paddingTop: 29,
-      paddingBottom: 22,
+      paddingHorizontal: 16,
+      paddingTop: 16,
+      paddingBottom: 16,
       borderWidth: 1,
       borderTopWidth: 3,
       borderColor: '#A8D7D1',
       borderTopColor:
         COLORS.primary,
-      borderRadius: 5,
+      borderRadius: 8,
       backgroundColor:
         COLORS.delivery,
-      marginBottom: 37,
+      marginBottom: 28,
     },
     deliveryHeading: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent:
         'space-between',
-      marginBottom: 23,
+      marginBottom: 10,
     },
     deliveryEyebrow: {
       flexShrink: 1,
@@ -1893,6 +2488,48 @@ const styles =
       fontSize: 10,
       letterSpacing: 1.35,
       color: COLORS.text,
+    },
+    upcomingChipsScroll: {
+      marginBottom: 12,
+    },
+    upcomingChips: {
+      gap: 8,
+    },
+    upcomingChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      minHeight: 40,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: '#A8D7D1',
+      backgroundColor: COLORS.white,
+    },
+    upcomingChipActive: {
+      backgroundColor: COLORS.primary,
+      borderColor: COLORS.primary,
+    },
+    upcomingChipPhoto: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+    },
+    upcomingChipName: {
+      fontFamily: 'Cairo_700Bold',
+      fontSize: 12,
+      lineHeight: 16,
+      color: COLORS.text,
+    },
+    upcomingChipDate: {
+      fontFamily: 'Cairo_400Regular',
+      fontSize: 10,
+      lineHeight: 14,
+      color: COLORS.muted,
+    },
+    upcomingChipTextActive: {
+      color: COLORS.white,
     },
     petMiniLink: {
       flexDirection: 'row',
@@ -1913,22 +2550,22 @@ const styles =
     deliveryDate: {
       fontFamily:
         'Cairo_800ExtraBold',
-      fontSize: 34,
-      lineHeight: 43,
+      fontSize: 24,
+      lineHeight: 32,
       color: COLORS.text,
     },
     deliveryWindow: {
-      marginTop: 10,
+      marginTop: 2,
       fontFamily:
         'Cairo_600SemiBold',
       fontSize: 12,
-      lineHeight: 20,
+      lineHeight: 18,
       color: COLORS.text,
     },
     mealCount: {
-      width: 57,
-      minHeight: 55,
-      marginLeft: 12,
+      width: 54,
+      minHeight: 44,
+      marginLeft: 10,
       borderLeftWidth: 1,
       borderLeftColor:
         '#A7D0CB',
@@ -1938,8 +2575,8 @@ const styles =
     mealNumber: {
       fontFamily:
         'Cairo_500Medium',
-      fontSize: 31,
-      lineHeight: 36,
+      fontSize: 24,
+      lineHeight: 30,
       color: COLORS.text,
     },
     mealLabel: {
@@ -1952,7 +2589,7 @@ const styles =
       height: 1,
       backgroundColor:
         '#C9DDD7',
-      marginVertical: 19,
+      marginVertical: 12,
     },
     addressRow: {
       flexDirection: 'row',
@@ -2053,8 +2690,8 @@ const styles =
       flexDirection: 'row',
       alignItems:
         'flex-start',
-      gap: 9,
-      marginTop: 18,
+      gap: 8,
+      marginTop: 8,
     },
     cutoffText: {
       flex: 1,
@@ -2068,18 +2705,18 @@ const styles =
       flexDirection: 'row',
       alignItems: 'center',
       gap: 16,
-      marginTop: 20,
+      marginTop: 12,
     },
     manageButton: {
       flex: 1,
-      minHeight: 61,
+      minHeight: 46,
       borderRadius: 10,
       backgroundColor:
         COLORS.dark,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      gap: 13,
+      gap: 10,
       paddingHorizontal: 12,
     },
     manageButtonText: {
@@ -2087,17 +2724,6 @@ const styles =
         'Cairo_700Bold',
       fontSize: 14,
       color: '#FFFFFF',
-    },
-    skipButton: {
-      minWidth: 72,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    skipText: {
-      fontFamily:
-        'Cairo_700Bold',
-      fontSize: 12,
-      color: '#C9C9C5',
     },
     section: {
       marginBottom: 36,
@@ -2246,6 +2872,82 @@ const styles =
         '#E7F0ED',
       alignItems: 'center',
       justifyContent: 'center',
+    },
+    petImagePremium: {
+      borderWidth: 2,
+      borderColor: '#C9A227',
+    },
+    pointsTotal: {
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      marginTop: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 3,
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: '#E8C66A',
+      backgroundColor: '#FFF8E5',
+    },
+    pointsTotalRtl: {
+      alignSelf: 'flex-end',
+      flexDirection: 'row-reverse',
+    },
+    pointsTotalText: {
+      fontFamily: 'Cairo_700Bold',
+      fontSize: 12.5,
+      color: '#9A6B00',
+    },
+    petPoints: {
+      position: 'absolute',
+      top: 8,
+      right: 8,
+      zIndex: 2,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      paddingHorizontal: 7,
+      paddingVertical: 1,
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: '#E8C66A',
+      backgroundColor: '#FFF8E5',
+    },
+    petPointsRtl: {
+      right: undefined,
+      left: 8,
+    },
+    petPointsUsable: {
+      borderColor: '#15803D',
+      backgroundColor: '#16A34A',
+    },
+    petPointsText: {
+      fontFamily: 'Cairo_700Bold',
+      fontSize: 11,
+      lineHeight: 17,
+      color: '#9A6B00',
+    },
+    petPointsTextUsable: {
+      color: '#FFFFFF',
+    },
+    premiumBadge: {
+      position: 'absolute',
+      bottom: 6,
+      alignSelf: 'center',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: 8,
+      paddingVertical: 1,
+      borderRadius: 999,
+      backgroundColor: '#B8860B',
+    },
+    premiumBadgeText: {
+      fontFamily: 'Cairo_700Bold',
+      fontSize: 10,
+      lineHeight: 15,
+      color: '#FFFFFF',
     },
     fillImage: {
       width: '100%',
@@ -2398,7 +3100,7 @@ const styles =
       textAlign: 'right',
     },
     updateRow: {
-      paddingVertical: 25,
+      paddingVertical: 14,
     },
     updateBorder: {
       borderTopWidth: 1,

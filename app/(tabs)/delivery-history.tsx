@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { LayoutAnimation, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, UIManager, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
@@ -20,12 +20,19 @@ import {
   slotLabel,
 } from "../../components/purchase/purchaseUtils";
 
+if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
 /*
 |--------------------------------------------------------------------------
 | DELIVERY HISTORY
 |--------------------------------------------------------------------------
 |
 | Params: animalId? (one pet, otherwise all pets)
+|
+| One line per delivery (date, meals, status). Tap: the recipes and the
+| address, read only (changes are made in "Manage delivery").
 |
 */
 
@@ -43,18 +50,26 @@ export default function DeliveryHistoryScreen() {
         receivedAt: "تم الاستلام في",
         planned: "مجدول إلى",
         choosePlan: "اختيار باقة",
+        recipes: "الوصفات",
       }
     : {
         title: "Delivery History",
         receivedAt: "Received at",
         planned: "Planned to",
         choosePlan: "Choose a plan",
+        recipes: "Recipes",
       };
 
   const [deliveries, setDeliveries] = useState<DeliveryWithPurchase[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [openIds, setOpenIds] = useState<Record<number, boolean>>({});
+
+  const toggle = (id: number) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setOpenIds(current => ({ ...current, [id]: !current[id] }));
+  };
 
   const load = useCallback(async () => {
     try {
@@ -126,47 +141,70 @@ export default function DeliveryHistoryScreen() {
           const petName = purchase.animal?.name;
           const place = delivery.address ? delivery.address.label || delivery.address.address : null;
 
+          const open = !!openIds[delivery.id];
+
           return (
             <View key={delivery.id} style={[styles.item, index < deliveries.length - 1 && styles.itemBorder]}>
-              <View style={[styles.itemHeader, isArabic && styles.rowRtl]}>
-                <Text style={styles.itemNumber}>
-                  {base.delivery.toUpperCase()} #{delivery.number} • {delivery.recipes_count} {base.meals.toUpperCase()}
-                </Text>
+              {/* CLOSED: one line */}
+              <Pressable onPress={() => toggle(delivery.id)} style={[styles.itemRow, isArabic && styles.rowRtl]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.itemDate, rtl]} numberOfLines={1}>
+                    {delivered ? formatDate(delivery.date, isArabic) : formatLongDate(delivery.date, isArabic)}
+                  </Text>
+                  <Text style={[styles.itemMeta, rtl]} numberOfLines={1}>
+                    #{delivery.number} · {delivery.recipes_count} {base.meals}
+                    {petName ? ` · ${petName}` : ""}
+                  </Text>
+                </View>
+
                 <StatusDot
                   color={markerColor(marker)}
                   label={marker === "delayed" ? base.delayed : delivery.status_label}
                   isArabic={isArabic}
                 />
-              </View>
+                <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={PCOLORS.muted} />
+              </Pressable>
 
-              <Text style={[styles.itemDate, rtl]}>
-                {delivered ? formatDate(delivery.date, isArabic) : formatLongDate(delivery.date, isArabic)}
-                {delivered && petName ? ` · ${petName}` : ""}
-              </Text>
+              {/* OPEN: recipes + address, read only */}
+              {open && (
+                <View style={styles.details}>
+                  <View style={styles.readOnly}>
+                  <Text style={[styles.detailsTitle, rtl]}>{t.recipes}</Text>
+                  {delivery.items.map((item, itemIndex) => (
+                    <View key={`${item.name}-${itemIndex}`} style={[styles.recipeRow, isArabic && styles.rowRtl]}>
+                      <Text style={[styles.recipeName, rtl]} numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                      <Text style={styles.recipeQty}>× {item.quantity}</Text>
+                    </View>
+                  ))}
 
-              <Text style={[styles.itemText, rtl]}>
-                {delivery.items.map(item => `${item.quantity} × ${item.name}`).join(" · ")}
-              </Text>
+                  {!!place && (
+                    <View style={[styles.placeRow, isArabic && styles.rowRtl]}>
+                      <Ionicons name="location-outline" size={16} color={PCOLORS.muted} />
+                      <Text style={[styles.itemText, { flex: 1, marginTop: 0 }, rtl]}>
+                        {delivered ? t.receivedAt : t.planned} {place}
+                        {delivery.delivery_slot ? ` · ${slotLabel(delivery.delivery_slot)}` : ""}
+                      </Text>
+                    </View>
+                  )}
+                  </View>
 
-              {!!place && (
-                <Text style={[styles.itemText, rtl]}>
-                  {delivered ? t.receivedAt : t.planned} {place} · {slotLabel(delivery.delivery_slot)}
-                </Text>
-              )}
-
-              {delivery.is_editable && (
-                <Pressable
-                  style={[styles.manage, isArabic && styles.rowRtl]}
-                  onPress={() =>
-                    router.push({
-                      pathname: "/manage-delivery",
-                      params: { purchaseId: String(purchase.id), deliveryId: String(delivery.id) },
-                    })
-                  }
-                >
-                  <Ionicons name={isArabic ? "arrow-back" : "arrow-forward"} size={19} color={PCOLORS.primary} />
-                  <Text style={styles.manageText}>{base.manageDelivery}</Text>
-                </Pressable>
+                  {delivery.is_editable && (
+                    <Pressable
+                      style={[styles.manage, isArabic && styles.rowRtl]}
+                      onPress={() =>
+                        router.push({
+                          pathname: "/manage-delivery",
+                          params: { purchaseId: String(purchase.id), deliveryId: String(delivery.id) },
+                        })
+                      }
+                    >
+                      <Ionicons name={isArabic ? "arrow-back" : "arrow-forward"} size={19} color={PCOLORS.primary} />
+                      <Text style={styles.manageText}>{base.manageDelivery}</Text>
+                    </Pressable>
+                  )}
+                </View>
               )}
             </View>
           );
@@ -189,12 +227,34 @@ const styles = StyleSheet.create({
   emptyText: { fontFamily: FONTS.medium, fontSize: 14, color: PCOLORS.muted },
   emptyLink: { fontFamily: FONTS.bold, fontSize: 14, color: PCOLORS.primary },
 
-  item: { paddingVertical: 28 },
+  item: { paddingVertical: 14 },
   itemBorder: { borderBottomWidth: 1, borderBottomColor: PCOLORS.border },
-  itemHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  itemNumber: { fontFamily: FONTS.bold, fontSize: 11, letterSpacing: 1, color: PCOLORS.text },
-  itemDate: { marginTop: 14, fontFamily: FONTS.bold, fontSize: 24, lineHeight: 32, color: PCOLORS.text },
-  itemText: { marginTop: 8, fontFamily: FONTS.regular, fontSize: 14, lineHeight: 22, color: PCOLORS.muted },
-  manage: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 18 },
+  itemRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  itemDate: { fontFamily: FONTS.bold, fontSize: 16, lineHeight: 24, color: PCOLORS.text },
+  itemMeta: { fontFamily: FONTS.regular, fontSize: 12.5, color: PCOLORS.muted },
+  itemText: { marginTop: 8, fontFamily: FONTS.regular, fontSize: 13, lineHeight: 20, color: PCOLORS.muted },
+
+  // Read only details (greyed)
+  details: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 9,
+    backgroundColor: PCOLORS.card,
+  },
+  readOnly: { opacity: 0.6 },
+  detailsTitle: { marginBottom: 6, fontFamily: FONTS.bold, fontSize: 12, letterSpacing: 0.5, color: PCOLORS.muted },
+  recipeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: PCOLORS.border,
+  },
+  recipeName: { flex: 1, fontFamily: FONTS.medium, fontSize: 13, color: PCOLORS.muted },
+  recipeQty: { fontFamily: FONTS.bold, fontSize: 13, color: PCOLORS.muted },
+  placeRow: { flexDirection: "row", alignItems: "flex-start", gap: 6, marginTop: 10 },
+  manage: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 14 },
   manageText: { fontFamily: FONTS.bold, fontSize: 15, color: PCOLORS.text },
 });

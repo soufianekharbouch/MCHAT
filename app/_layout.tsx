@@ -25,8 +25,26 @@ import {
 import * as Notifications
   from "expo-notifications";
 
-import * as SecureStore
-  from "expo-secure-store";
+import * as SplashScreen
+  from "expo-splash-screen";
+
+import {
+  Cairo_400Regular,
+  Cairo_500Medium,
+  Cairo_600SemiBold,
+  Cairo_700Bold,
+  Cairo_800ExtraBold,
+  useFonts,
+} from "@expo-google-fonts/cairo";
+
+import {
+  getStoredItem,
+  setStoredItem,
+} from "../services/storage";
+
+import {
+  loadSession,
+} from "../services/session";
 
 import {
   LanguageProvider,
@@ -43,6 +61,25 @@ import {
 import {
   getCustomerSettings,
 } from "../services/customerApi";
+
+import {
+  clearOrderCart,
+} from "../services/orderCart";
+
+
+/*
+|--------------------------------------------------------------------------
+| SPLASH SCREEN
+|--------------------------------------------------------------------------
+|
+| Stays visible until the Cairo fonts are loaded (see RootLayout).
+| The fonts are loaded HERE for the whole app: before, only the login
+| screen loaded them, so the installed app (Play Store) opened on the
+| shop / Home with the system font.
+|
+*/
+
+SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
 
 /*
@@ -138,7 +175,7 @@ const sendAppActivity =
 
 
       const accessToken =
-        await SecureStore.getItemAsync(
+        await getStoredItem(
           "access_token"
         );
 
@@ -226,6 +263,23 @@ const sendAppActivity =
 
 export default function RootLayout() {
 
+  /*
+  |--------------------------------------------------------------------------
+  | FONTS (whole app)
+  |--------------------------------------------------------------------------
+  */
+
+  const [
+    fontsLoaded,
+    fontError,
+  ] = useFonts({
+    Cairo_400Regular,
+    Cairo_500Medium,
+    Cairo_600SemiBold,
+    Cairo_700Bold,
+    Cairo_800ExtraBold,
+  });
+
   const [
     appReady,
     setAppReady,
@@ -272,65 +326,14 @@ export default function RootLayout() {
   const hasValidSession =
     async (): Promise<boolean> => {
 
+      /*
+       * WhatsApp session: no expiry (until logout).
+       * Old password sessions: removed when expired.
+       */
+
       try {
 
-        const accessToken =
-          await SecureStore.getItemAsync(
-            "access_token"
-          );
-
-
-        if (!accessToken) {
-          return false;
-        }
-
-
-        /*
-         * Vérifier aussi l'expiration
-         * si elle est enregistrée.
-         */
-
-        const expiresAt =
-          await SecureStore.getItemAsync(
-            "access_token_expires_at"
-          );
-
-
-        if (expiresAt) {
-
-          const expiresTime =
-            new Date(
-              expiresAt
-            ).getTime();
-
-
-          if (
-            !Number.isNaN(
-              expiresTime
-            )
-            &&
-            expiresTime <= Date.now()
-          ) {
-
-            /*
-             * Session expirée :
-             * supprimer les anciennes données.
-             */
-
-            await SecureStore.deleteItemAsync(
-              "access_token"
-            );
-
-            await SecureStore.deleteItemAsync(
-              "access_token_expires_at"
-            );
-
-            return false;
-          }
-        }
-
-
-        return true;
+        return await loadSession();
 
       } catch (
         error
@@ -358,7 +361,7 @@ export default function RootLayout() {
       try {
 
         const value =
-          await SecureStore.getItemAsync(
+          await getStoredItem(
             "must_change_password"
           );
 
@@ -382,6 +385,10 @@ export default function RootLayout() {
   |--------------------------------------------------------------------------
   | HANDLE PUSH CLICK
   |--------------------------------------------------------------------------
+  |
+  | Only marks the notification as viewed.
+  | The app always opens on Home (no redirection to the notifications page).
+  |
   */
 
 const handleNotificationResponse =
@@ -454,42 +461,9 @@ const handleNotificationResponse =
 
 
       /*
-      |--------------------------------------------------------------------------
-      | CHECK SESSION
-      |--------------------------------------------------------------------------
-      */
-
-      const loggedIn =
-        await hasValidSession();
-
-
-      if (!loggedIn) {
-
-        router.replace(
-          "/login"
-        );
-
-        return;
-      }
-
-
-      const mustChangePassword =
-        await mustChangeInitialPassword();
-
-
-      if (mustChangePassword) {
-
-        router.replace(
-          "/change-password"
-        );
-
-        return;
-      }
-
-
-      router.replace(
-        "/notifications"
-      );
+       * No redirection anymore: the app stays on its current page
+       * (at start: Home). The notifications stay in the bell / list.
+       */
 
     } catch (
       error
@@ -499,37 +473,6 @@ const handleNotificationResponse =
         "Notification click error:",
         error
       );
-
-
-      const loggedIn =
-        await hasValidSession();
-
-
-      if (loggedIn) {
-
-        const mustChangePassword =
-          await mustChangeInitialPassword();
-
-
-        if (mustChangePassword) {
-
-          router.replace(
-            "/change-password"
-          );
-
-        } else {
-
-          router.replace(
-            "/notifications"
-          );
-        }
-
-      } else {
-
-        router.replace(
-          "/login"
-        );
-      }
     }
   };
 
@@ -849,6 +792,20 @@ const initializeApp =
 
       /*
       |--------------------------------------------------------------------------
+      | EMPTY CART AT EACH START
+      |--------------------------------------------------------------------------
+      |
+      | The order in progress never survives a restart of the app.
+      |
+      */
+
+      await clearOrderCart().catch(
+        () => undefined
+      );
+
+
+      /*
+      |--------------------------------------------------------------------------
       | REGISTER DEVICE FIRST
       |--------------------------------------------------------------------------
       */
@@ -891,49 +848,31 @@ const initializeApp =
 
       /*
       |--------------------------------------------------------------------------
-      | APP STARTED FROM PUSH
+      | APP STARTED FROM PUSH: view counted, the app still opens on Home
       |--------------------------------------------------------------------------
       */
 
       if (response) {
 
-        if (mounted) {
+        // Count the view, then normal start on Home
+        void handleNotificationResponse(
+          response
+        );
 
-          setAppReady(
-            true
-          );
+        try {
 
+          await Notifications
+            .clearLastNotificationResponseAsync();
 
-          setTimeout(
-            async () => {
+        } catch (
+          clearError
+        ) {
 
-              await handleNotificationResponse(
-                response
-              );
-
-
-              try {
-
-                await Notifications
-                  .clearLastNotificationResponseAsync();
-
-              } catch (
-                clearError
-              ) {
-
-                console.warn(
-                  "Unable to clear last notification response:",
-                  clearError
-                );
-              }
-
-            },
-            0
+          console.warn(
+            "Unable to clear last notification response:",
+            clearError
           );
         }
-
-
-        return;
       }
 
 
@@ -942,6 +881,11 @@ const initializeApp =
       | NORMAL START
       |--------------------------------------------------------------------------
       */
+
+      /*
+       * Visitor: no forced login anymore.
+       * The Home tab shows the shop catalog.
+       */
 
       if (!loggedIn) {
 
@@ -956,7 +900,7 @@ const initializeApp =
             () => {
 
               router.replace(
-                "/login"
+                "/(tabs)" as any
               );
 
             },
@@ -1001,7 +945,7 @@ const initializeApp =
           customerLanguage === "en"
         ) {
 
-          await SecureStore.setItemAsync(
+          await setStoredItem(
             "locale",
             customerLanguage
           );
@@ -1061,7 +1005,7 @@ const initializeApp =
           () => {
 
             router.replace(
-              "/login"
+              "/(tabs)" as any
             );
 
           },
@@ -1093,6 +1037,40 @@ const initializeApp =
 
   /*
   |--------------------------------------------------------------------------
+  | HIDE THE SPLASH SCREEN WHEN THE FONTS ARE READY
+  |--------------------------------------------------------------------------
+  */
+
+  useEffect(() => {
+
+    if (
+      fontsLoaded ||
+      fontError
+    ) {
+
+      SplashScreen
+        .hideAsync()
+        .catch(() => undefined);
+    }
+
+  }, [
+    fontsLoaded,
+    fontError,
+  ]);
+
+
+  if (
+    !fontsLoaded &&
+    !fontError
+  ) {
+
+    // Splash screen still visible
+    return null;
+  }
+
+
+  /*
+  |--------------------------------------------------------------------------
   | LOADING
   |--------------------------------------------------------------------------
   |
@@ -1115,12 +1093,13 @@ const initializeApp =
             justifyContent:
               "center",
             backgroundColor:
-              "#FFFFFF",
+              "#F4F1EC",
           }}
         >
 
           <ActivityIndicator
             size="large"
+            color="#249B97"
           />
 
         </View>
@@ -1145,22 +1124,46 @@ return (
       <CustomerDataProvider>
 
         <Stack
-          initialRouteName="login"
+          initialRouteName="(tabs)"
           screenOptions={{
             headerShown: false,
           }}
         >
 
           <Stack.Screen
+            name="(tabs)"
+          />
+
+          {/* WhatsApp sign in / sign up */}
+
+          <Stack.Screen
             name="login"
           />
 
           <Stack.Screen
-            name="change-password"
+            name="register"
+          />
+
+          {/* Password screens kept (not used for now) */}
+
+          <Stack.Screen
+            name="login-password"
           />
 
           <Stack.Screen
-            name="(tabs)"
+            name="register-full"
+          />
+
+          <Stack.Screen
+            name="forgot-password"
+          />
+
+          <Stack.Screen
+            name="reset-password"
+          />
+
+          <Stack.Screen
+            name="change-password"
           />
 
           <Stack.Screen
@@ -1176,4 +1179,4 @@ return (
   </SafeAreaProvider>
 
 );
-} 
+}

@@ -1,23 +1,26 @@
-import React, { useCallback, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useCallback, useEffect, useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 
 import { useAppLanguage } from "../../context/LanguageContext";
 import { useSession } from "../../services/session";
-import { fetchShopProduct } from "../../services/shopApi";
-import type { ShopProductResponse } from "../../types/shop";
+import { fetchShopProduct, fetchShopProducts } from "../../services/shopApi";
+import type { ShopProduct, ShopProductResponse } from "../../types/shop";
 
 import { BackRow, CenteredLoader, ErrorState, PrimaryButton } from "../../components/purchase/ScreenParts";
 import { FONTS, PCOLORS } from "../../components/purchase/purchaseUtils";
 import {
   InfoChip,
   PriceTag,
+  ConsultationNote,
   ProductBadges,
   ProductImage,
   SignInBanner,
   goToCheckout,
 } from "../../components/shop/shopUi";
+import { findGroup, groupProducts, type ShopProductGroup } from "../../components/shop/productGroups";
+import ProductDescription from "../../components/shop/ProductDescription";
 
 /*
 |--------------------------------------------------------------------------
@@ -36,12 +39,23 @@ export default function ShopProductScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Same pack in the other ages (REG-CAT-KITTEN / ADULT / SENIOR) + chosen age
+  const [group, setGroup] = useState<ShopProductGroup | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  // Another product opened (the tab screen stays mounted): back to its age
+  useEffect(() => {
+    setSelectedId(null);
+    setGroup(null);
+  }, [productId]);
+
   const t = isArabic
     ? {
         back: "المتجر",
         retry: "إعادة المحاولة",
         buy: "اشترك الآن",
         recipesTitle: "الوصفات المتضمنة",
+        premiumHint: "👑 يتواصل معك فريقنا بعد الشراء لتحضير وصفاتك",
         aboutTitle: "عن الباقة",
         ages: "الأعمار",
         recipes: "وصفة",
@@ -49,6 +63,8 @@ export default function ShopProductScreen() {
         deliveries: "عدد التوصيلات",
         trialOffer: "سعر خاص لأن حيوانك في فترة التجربة",
         ageAtCheckout: "ستختار عمر حيوانك في الخطوة التالية.",
+        chooseAge: "اختر عمر حيوانك",
+        selectedAge: "العمر المختار:",
         premium: "بريميوم",
       }
     : {
@@ -56,6 +72,7 @@ export default function ShopProductScreen() {
         retry: "Try again",
         buy: "Subscribe now",
         recipesTitle: "Included recipes",
+        premiumHint: "👑 Our team contacts you after the purchase to prepare your recipes",
         aboutTitle: "About this plan",
         ages: "Ages",
         recipes: "recipes",
@@ -63,6 +80,8 @@ export default function ShopProductScreen() {
         deliveries: "Deliveries",
         trialOffer: "Special price because your pet is on a trial",
         ageAtCheckout: "You will choose your pet's age in the next step.",
+        chooseAge: "Choose your pet's age",
+        selectedAge: "Selected age:",
         premium: "Premium",
       };
 
@@ -77,6 +96,15 @@ export default function ShopProductScreen() {
       setError("");
       const response = await fetchShopProduct(lang, productId);
       setData(response);
+      setSelectedId(current => current ?? response.product.id);
+
+      // Other ages of the same pack (not blocking: the page works without)
+      try {
+        const catalog = await fetchShopProducts(lang, response.product.species);
+        setGroup(findGroup(groupProducts(catalog.products, isArabic), response.product.id));
+      } catch {
+        setGroup(null);
+      }
     } catch (e: any) {
       setError(e?.message || "Error");
     } finally {
@@ -107,7 +135,11 @@ export default function ShopProductScreen() {
 
   if (!data) return null;
 
-  const product = data.product;
+  // Chosen age version (price, recipes, rules follow it)
+  const variants: ShopProduct[] = group && group.products.length > 1 ? group.products : [data.product];
+  const product = variants.find(item => item.id === selectedId) ?? data.product;
+  const ageLabelOf = (item: ShopProduct) =>
+    item.age_options.find(option => item.life_stages.includes(option.value))?.label ?? item.life_stages_label;
   const textDir = isArabic ? styles.textRtl : null;
   const rules = product.rules;
   const deliveriesLabel =
@@ -128,7 +160,32 @@ export default function ShopProductScreen() {
         </View>
 
         <View style={styles.body}>
-          <Text style={[styles.name, textDir]}>{product.name}</Text>
+          <Text style={[styles.name, textDir]}>{variants.length > 1 && group ? group.title : product.name}</Text>
+
+          {/* AGE: one version of the pack per age, the price follows */}
+          {variants.length > 1 && (
+            <View style={styles.ageBox}>
+              <Text style={[styles.ageTitle, textDir]}>{t.chooseAge}</Text>
+              <View style={[styles.ageRow, isArabic && styles.rowRtl]}>
+                {variants.map(item => {
+                  const active = item.id === product.id;
+
+                  return (
+                    <Pressable
+                      key={item.id}
+                      onPress={() => setSelectedId(item.id)}
+                      style={({ pressed }) => [styles.ageOption, active && styles.ageOptionActive, pressed && { opacity: 0.85 }]}
+                    >
+                      <Text style={[styles.ageOptionLabel, active && styles.ageOptionLabelActive]}>{ageLabelOf(item)}</Text>
+                      <Text style={[styles.ageOptionPrice, active && styles.ageOptionLabelActive]}>
+                        {item.current_price.toFixed(3)} {item.currency}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          )}
 
           <PriceTag product={product} isArabic={isArabic} large />
 
@@ -156,14 +213,21 @@ export default function ShopProductScreen() {
             </Text>
           )}
 
-          {!!product.description && (
-            <>
-              <Text style={[styles.sectionTitle, textDir]}>{t.aboutTitle}</Text>
-              <Text style={[styles.description, textDir]}>{product.description}</Text>
-            </>
-          )}
+          {/* PREMIUM-... : the team calls the customer and chooses his recipes */}
+          <ConsultationNote product={product} isArabic={isArabic} />
 
-          {product.recipes.length > 0 && (
+          {!!product.description &&
+            (/^\s*#/m.test(product.description) ? (
+              // Description with ## sections: blocks that open / close
+              <ProductDescription key={product.id} description={product.description} isArabic={isArabic} />
+            ) : (
+              <>
+                <Text style={[styles.sectionTitle, textDir]}>{t.aboutTitle}</Text>
+                <Text style={[styles.description, textDir]}>{product.description}</Text>
+              </>
+            ))}
+
+          {product.recipes.length > 0 && !product.requires_consultation && (
             <>
               <Text style={[styles.sectionTitle, textDir]}>{t.recipesTitle}</Text>
               {product.recipes.map(recipe => (
@@ -186,7 +250,13 @@ export default function ShopProductScreen() {
 
       {/* STICKY BUY BAR */}
       <View style={styles.footer}>
-        <Text style={styles.footerHint}>{t.ageAtCheckout}</Text>
+        <Text style={[styles.footerHint, product.requires_consultation && styles.footerHintPremium]}>
+          {product.requires_consultation
+            ? t.premiumHint
+            : variants.length > 1
+              ? `${t.selectedAge} ${ageLabelOf(product)}`
+              : t.ageAtCheckout}
+        </Text>
         <PrimaryButton label={t.buy} icon="cart-outline" onPress={() => goToCheckout(product.id)} />
       </View>
     </View>
@@ -194,6 +264,7 @@ export default function ShopProductScreen() {
 }
 
 const styles = StyleSheet.create({
+  footerHintPremium: { color: "#8A6400", fontFamily: FONTS.semiBold },
   screen: { flex: 1, backgroundColor: PCOLORS.background },
   content: { paddingBottom: 30 },
   rowRtl: { flexDirection: "row-reverse" },
@@ -217,6 +288,25 @@ const styles = StyleSheet.create({
   offerText: { flex: 1, fontFamily: FONTS.semiBold, fontSize: 13, color: PCOLORS.danger },
 
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+
+  ageBox: { gap: 8 },
+  ageTitle: { fontFamily: FONTS.bold, fontSize: 15, color: PCOLORS.text },
+  ageRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  ageOption: {
+    flexGrow: 1,
+    minWidth: 95,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: PCOLORS.border,
+    backgroundColor: PCOLORS.white,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    alignItems: "center",
+  },
+  ageOptionActive: { borderColor: PCOLORS.primary, backgroundColor: PCOLORS.primary },
+  ageOptionLabel: { fontFamily: FONTS.bold, fontSize: 14, color: PCOLORS.text },
+  ageOptionLabelActive: { color: PCOLORS.white },
+  ageOptionPrice: { fontFamily: FONTS.medium, fontSize: 12, color: PCOLORS.muted },
   perRecipe: { fontFamily: FONTS.medium, fontSize: 13, color: PCOLORS.muted },
 
   sectionTitle: { marginTop: 8, fontFamily: FONTS.bold, fontSize: 17, color: PCOLORS.text },

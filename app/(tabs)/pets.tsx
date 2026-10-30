@@ -11,6 +11,7 @@ import { fetchPurchases, } from "../../services/purchaseApi";
 import type { PurchaseSummary, } from "../../types/purchase";
 import { formatDate, } from "../../components/purchase/purchaseUtils";
 import GuestGate from "../../components/shop/GuestGate";
+import { fetchLoyalty, levelIcon, type LoyaltyResponse, type PetLoyalty } from "../../services/loyaltyApi";
 const COLORS = {
     background: "#F4F1EC",
     primary: "#249B97",
@@ -24,6 +25,32 @@ const COLORS = {
     dangerLight: "#FEF3F2",
 };
 type ViewMode = "list" | "grid";
+/*
+ * PREMIUM-... pack (sent by the API on each purchase):
+ *  - needs_consultation: our team prepares his custom recipes
+ *  - custom_ready: custom recipes ready
+ */
+type PremiumFlags = {
+    is_personalized?: boolean;
+    needs_consultation?: boolean;
+    custom_ready?: boolean;
+};
+type PremiumInfo = {
+    pending: boolean;
+} | null;
+const GOLD = {
+    main: "#B8860B",
+    dark: "#6B4E00",
+    border: "#C9A227",
+    light: "#FFF9EC",
+};
+// Loyalty points colors
+const POINTS = {
+    gold: "#D4A017",
+    dark: "#9A6B00",
+    light: "#FFF8E5",
+    border: "#E8C66A",
+};
 type ExtendedPet = Pet & {
     subscription_status?: string;
     next_order?: any;
@@ -48,9 +75,21 @@ export default function PetsScreen() {
             console.error("Unable to load purchases:", purchaseError);
         }
     }, [isArabic]);
+    /*
+     * Loyalty points of each pet (+ total of the customer).
+     */
+    const [loyalty, setLoyalty,] = useState<LoyaltyResponse | null>(null);
+    const loadLoyalty = useCallback(async () => {
+        try {
+            setLoyalty(await fetchLoyalty(isArabic ? "ar" : "en"));
+        }
+        catch (loyaltyError) {
+            console.warn("Unable to load loyalty points:", loyaltyError);
+        }
+    }, [isArabic]);
     const refreshAll = useCallback(async () => {
-        await Promise.all([refresh(), loadPurchases()]);
-    }, [refresh, loadPurchases]);
+        await Promise.all([refresh(), loadPurchases(), loadLoyalty()]);
+    }, [refresh, loadPurchases, loadLoyalty]);
     useFocusEffect(useCallback(() => {
         void refreshAll();
     }, [refreshAll]));
@@ -80,6 +119,15 @@ export default function PetsScreen() {
             deleteMessage: "هل أنت متأكد أنك تريد حذف هذا الحيوان؟",
             cancel: "إلغاء",
             deleteError: "تعذر حذف الحيوان.",
+            premium: "بريميوم",
+            premiumSubscription: "اشتراك بريميوم",
+            premiumPending: "يتواصل معك فريقنا لتحضير وصفاته الخاصة",
+            premiumReady: "وصفاته المخصصة جاهزة",
+            points: "نقطة",
+            pointsTotal: (n: number) => `${n} نقطة ولاء`,
+            pointsUsable: (amount: string) => `قابلة للاستخدام = خصم ${amount}`,
+            pointsMissing: (n: number) => `${n} نقطة أخرى لاستخدامها`,
+            pointsLost: (days: number) => `تنتهي خلال ${days} يوم`,
         }
         : {
             title: "My Pets",
@@ -106,10 +154,19 @@ export default function PetsScreen() {
             deleteMessage: "Are you sure you want to delete this pet?",
             cancel: "Cancel",
             deleteError: "Unable to delete this pet.",
+            premium: "Premium",
+            premiumSubscription: "Premium subscription",
+            premiumPending: "Our team contacts you to prepare his own recipes",
+            premiumReady: "His custom recipes are ready",
+            points: "pts",
+            pointsTotal: (n: number) => `${n} loyalty points`,
+            pointsUsable: (amount: string) => `usable = ${amount} off`,
+            pointsMissing: (n: number) => `${n} more to use them`,
+            pointsLost: (days: number) => `lost in ${days} day${days === 1 ? "" : "s"}`,
         };
     const pets = subscription?.animals || [];
     const openAddPet = () => {
-        router.push("/pet-form");
+        router.push({ pathname: "/pet-form", params: { id: "" } });
     };
     const openManagePet = (pet: Pet) => {
         router.push({
@@ -130,25 +187,27 @@ export default function PetsScreen() {
             ?? null;
     };
     /*
-     * Bottom button of the card:
-     *  - active plan  -> Edit Subscription (pet profile with the plan card)
-     *  - pending plan -> the order (payment / receipt)
-     *  - no plan      -> Choose a plan (plans page for this pet)
+     * Premium pet: a PREMIUM-... pack paid / running
+     * (untreated = our team prepares his custom recipes).
      */
-    const openSubscriptionAction = (pet: Pet) => {
-        const plan = planFor(pet);
-        if (plan?.is_active) {
-            router.push({ pathname: "/pet-form", params: { id: String(pet.id) } });
-            return;
+    const premiumFor = (pet: Pet): PremiumInfo => {
+        const premium = purchases.filter(purchase => Number(purchase.animal?.id) === Number(pet.id) &&
+            purchase.is_active &&
+            !!(purchase as PurchaseSummary & PremiumFlags).is_personalized);
+        if (premium.length === 0) {
+            return null;
         }
-        if (plan) {
-            router.push({ pathname: "/purchase", params: { id: String(plan.id) } });
-            return;
-        }
-        router.push({ pathname: "/plans", params: { animalId: String(pet.id) } });
+        return {
+            pending: premium.some(purchase => !!(purchase as PurchaseSummary & PremiumFlags).needs_consultation),
+        };
     };
-    const openRenewPlans = () => {
-        router.push("/plans");
+    const loyaltyOn = !!loyalty?.program?.enabled;
+    const pointsFor = (pet: Pet): PetLoyalty | null => loyaltyOn
+        ? loyalty?.pets.find(item => Number(item.pet.id) === Number(pet.id)) ?? null
+        : null;
+    const currency = loyalty?.program?.currency ?? "KWD";
+    const openLoyalty = () => {
+        router.push("/loyalty" as any);
     };
     const confirmDeletePet = (pet: Pet) => {
         Alert.alert(t.deleteTitle, t.deleteMessage, [
@@ -232,6 +291,24 @@ export default function PetsScreen() {
 
           </Text>
 
+          {loyaltyOn && pets.length > 0 && (<Pressable onPress={openLoyalty} hitSlop={6} style={[
+                styles.pointsTotal,
+                isArabic &&
+                    styles.pointsTotalRtl,
+            ]}>
+
+              <Ionicons name="star" size={14} color={POINTS.gold}/>
+
+              <Text style={styles.pointsTotalText}>
+
+                {t.pointsTotal(loyalty?.total_points ?? 0)}
+
+              </Text>
+
+              <Ionicons name={isArabic ? "chevron-back" : "chevron-forward"} size={14} color={POINTS.dark}/>
+
+            </Pressable>)}
+
         </View>
 
         
@@ -244,26 +321,6 @@ export default function PetsScreen() {
                 !isCompact &&
                 styles.rowRtl,
         ]}>
-
-          
-
-          <Pressable onPress={openRenewPlans} style={({ pressed, }) => [
-            styles.renewButton,
-            isCompact &&
-                styles.fullWidthButton,
-            pressed &&
-                styles.buttonPressed,
-        ]}>
-
-            <MaterialCommunityIcons name="creation" size={20} color="#FFFFFF"/>
-
-            <Text numberOfLines={1} style={styles.renewButtonText}>
-
-              {t.renewPlans}
-
-            </Text>
-
-          </Pressable>
 
           
 
@@ -394,11 +451,11 @@ export default function PetsScreen() {
             "list" ? (<View style={styles.listContainer}>
 
             {pets.map((pet, index) => (<PetListItem key={pet.id} pet={pet as ExtendedPet} t={t} isArabic={isArabic} isCompact={isCompact} isLast={index ===
-                    pets.length - 1} onManage={() => openManagePet(pet)} plan={planFor(pet)} onEditSubscription={() => openSubscriptionAction(pet)}/>))}
+                    pets.length - 1} onManage={() => openManagePet(pet)} plan={planFor(pet)} premium={premiumFor(pet)} points={pointsFor(pet)} currency={currency} onPoints={openLoyalty}/>))}
 
           </View>) : (<View style={styles.gridContainer}>
 
-            {pets.map((pet) => (<PetGridCard key={pet.id} pet={pet as ExtendedPet} t={t} isArabic={isArabic} isCompact={isCompact} onManage={() => openManagePet(pet)} plan={planFor(pet)} onEditSubscription={() => openSubscriptionAction(pet)}/>))}
+            {pets.map((pet) => (<PetGridCard key={pet.id} pet={pet as ExtendedPet} t={t} isArabic={isArabic} isCompact={isCompact} onManage={() => openManagePet(pet)} plan={planFor(pet)} premium={premiumFor(pet)} points={pointsFor(pet)} currency={currency} onPoints={openLoyalty}/>))}
 
           </View>)}
 
@@ -430,7 +487,8 @@ function getPetData(pet: ExtendedPet, t: any, purchase: PurchaseSummary | null, 
         : null;
     let plan: string | null = null;
     if (purchase) {
-        plan = `${purchase.product.name} (${purchase.usage.total_recipes} ${t.meals})`;
+        const isPremium = !!(purchase as PurchaseSummary & PremiumFlags).is_personalized;
+        plan = `${isPremium ? t.premiumSubscription : purchase.product.name} (${purchase.usage.total_recipes} ${t.meals})`;
     }
     else if (legacyActive) {
         const sourceOrder = pet.next_order;
@@ -441,16 +499,6 @@ function getPetData(pet: ExtendedPet, t: any, purchase: PurchaseSummary | null, 
             ? `${recipe}${meals ? ` (${meals} ${t.meals})` : ""}`
             : null;
     }
-    const actionLabel = active
-        ? t.editSubscription
-        : pending
-            ? t.viewPlan
-            : t.choosePlan;
-    const actionIcon: any = active
-        ? "pencil-outline"
-        : pending
-            ? "receipt-outline"
-            : "sparkles-outline";
     const details = [
         pet.breed_size_category ||
             null,
@@ -467,25 +515,135 @@ function getPetData(pet: ExtendedPet, t: any, purchase: PurchaseSummary | null, 
         nextDate,
         plan,
         details,
-        actionLabel,
-        actionIcon,
     };
 }
-function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, onEditSubscription, plan: purchase, }: {
+/*
+ * PREMIUM badge (crown) + short line: being prepared / custom recipes ready
+ */
+function PremiumBadge({ t, isArabic, premium, withNote, }: {
+    t: any;
+    isArabic: boolean;
+    premium: PremiumInfo;
+    withNote?: boolean;
+}) {
+    if (!premium) {
+        return null;
+    }
+    return (<View style={styles.premiumWrap}>
+
+      <View style={[
+            styles.premiumBadge,
+            isArabic &&
+                styles.rowRtl,
+            isArabic &&
+                styles.premiumBadgeRtl,
+        ]}>
+
+        <MaterialCommunityIcons name="crown" size={14} color="#FFFFFF"/>
+
+        <Text style={styles.premiumBadgeText}>
+
+          {t.premium}
+
+        </Text>
+
+      </View>
+
+      {withNote && (<View style={[
+                styles.premiumNote,
+                isArabic &&
+                    styles.rowRtl,
+            ]}>
+
+          <Ionicons name={premium.pending ? "call-outline" : "sparkles"} size={14} color={GOLD.dark}/>
+
+          <Text style={[
+                styles.premiumNoteText,
+                isArabic &&
+                    styles.textRtl,
+            ]}>
+
+            {premium.pending ? t.premiumPending : t.premiumReady}
+
+          </Text>
+
+        </View>)}
+
+    </View>);
+}
+/*
+ * LOYALTY POINTS of a pet: balance + level, usable now / missing,
+ * lost soon. Tap = "My points" page.
+ */
+function PetPoints({ points, t, isArabic, currency, compact, onPress, }: {
+    points: PetLoyalty | null;
+    t: any;
+    isArabic: boolean;
+    currency: string;
+    compact?: boolean;
+    onPress: () => void;
+}) {
+    if (!points || (points.balance <= 0 && points.lifetime_earned <= 0)) {
+        return null;
+    }
+    const usable = points.usable_points > 0;
+    const losingSoon = points.balance > 0 && points.days_left !== null && points.days_left >= 0 && points.days_left <= 7;
+    const detail = losingSoon
+        ? t.pointsLost(points.days_left)
+        : usable
+            ? t.pointsUsable(`${points.usable_discount.toFixed(3)} ${currency}`)
+            : points.balance > 0
+                ? t.pointsMissing(points.missing_points)
+                : null;
+    return (<Pressable onPress={onPress} hitSlop={4} style={[
+            styles.pointsRow,
+            usable && styles.pointsRowUsable,
+            losingSoon && styles.pointsRowDanger,
+            isArabic && styles.pointsTotalRtl,
+        ]}>
+
+      <MaterialCommunityIcons name={(points.level ? levelIcon(points.level.icon) : "star") as any} size={15} color={points.level?.color ?? POINTS.gold}/>
+
+      <Text numberOfLines={1} style={styles.pointsValue}>
+
+        {points.balance} {t.points}
+
+      </Text>
+
+      {!!detail && !compact && (<Text numberOfLines={1} style={[
+                styles.pointsDetail,
+                usable && styles.pointsDetailUsable,
+                losingSoon && styles.pointsDetailDanger,
+                isArabic && styles.textRtl,
+            ]}>
+
+          · {detail}
+
+        </Text>)}
+
+    </Pressable>);
+}
+function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, plan: purchase, premium, points, currency, onPoints, }: {
     pet: ExtendedPet;
     t: any;
     isArabic: boolean;
     isCompact: boolean;
     isLast: boolean;
     onManage: () => void;
-    onEditSubscription: () => void;
     plan: PurchaseSummary | null;
+    premium: PremiumInfo;
+    points: PetLoyalty | null;
+    currency: string;
+    onPoints: () => void;
 }) {
-    const { active, pending, statusLabel, nextDate, plan, details, actionLabel, actionIcon, } = getPetData(pet, t, purchase, isArabic);
-    return (<View style={[
+    const { active, pending, statusLabel, nextDate, plan, details, } = getPetData(pet, t, purchase, isArabic);
+    // Tap on the card = Manage (pet profile)
+    return (<Pressable onPress={onManage} style={({ pressed, }) => [
             styles.listPet,
             !isLast &&
                 styles.listPetBorder,
+            pressed &&
+                styles.cardPressed,
         ]}>
 
       
@@ -498,7 +656,7 @@ function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, onEditSubs
                 styles.rowRtl,
         ]}>
 
-        <PetAvatar pet={pet} mode="list" isCompact={isCompact}/>
+        <PetAvatar pet={pet} mode="list" isCompact={isCompact} premium={!!premium}/>
 
         <View style={styles.listPetContent}>
 
@@ -544,6 +702,10 @@ function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, onEditSubs
             </View>
 
           </View>
+
+          <PremiumBadge t={t} isArabic={isArabic} premium={premium}/>
+
+          <PetPoints points={points} t={t} isArabic={isArabic} currency={currency} onPress={onPoints}/>
 
           {details.map((detail, index) => (<Text key={index} style={[
                 styles.petDetailText,
@@ -632,47 +794,33 @@ function PetListItem({ pet, t, isArabic, isCompact, isLast, onManage, onEditSubs
 
         </Pressable>
 
-        <Pressable onPress={onEditSubscription} style={[
-            styles.actionButton,
-            isArabic &&
-                styles.rowRtl,
-        ]}>
-
-          <Ionicons name={actionIcon} size={18} color={COLORS.primary}/>
-
-          <Text numberOfLines={1} style={[
-            styles.actionText,
-            isCompact &&
-                styles.actionTextCompact,
-        ]}>
-
-            {actionLabel}
-
-          </Text>
-
-        </Pressable>
-
       </View>
 
-    </View>);
+    </Pressable>);
 }
-function PetGridCard({ pet, t, isArabic, isCompact, onManage, onEditSubscription, plan: purchase, }: {
+function PetGridCard({ pet, t, isArabic, isCompact, onManage, plan: purchase, premium, points, currency, onPoints, }: {
     pet: ExtendedPet;
     t: any;
     isArabic: boolean;
     isCompact: boolean;
     onManage: () => void;
-    onEditSubscription: () => void;
     plan: PurchaseSummary | null;
+    premium: PremiumInfo;
+    points: PetLoyalty | null;
+    currency: string;
+    onPoints: () => void;
 }) {
-    const { active, pending, statusLabel, nextDate, plan, details, actionLabel, actionIcon, } = getPetData(pet, t, purchase, isArabic);
-    return (<View style={[
+    const { active, pending, statusLabel, nextDate, plan, details, } = getPetData(pet, t, purchase, isArabic);
+    // Tap on the card = Manage (pet profile)
+    return (<Pressable onPress={onManage} style={({ pressed, }) => [
             styles.gridCard,
             isCompact &&
                 styles.gridCardCompact,
+            pressed &&
+                styles.cardPressed,
         ]}>
 
-      <PetAvatar pet={pet} mode="grid" isCompact={isCompact}/>
+      <PetAvatar pet={pet} mode="grid" isCompact={isCompact} premium={!!premium}/>
 
       <Text numberOfLines={1} style={[
             styles.gridPetName,
@@ -696,6 +844,10 @@ function PetGridCard({ pet, t, isArabic, isCompact, onManage, onEditSubscription
         {statusLabel}
 
       </Text>
+
+      <PremiumBadge t={t} isArabic={isArabic} premium={premium}/>
+
+      <PetPoints points={points} t={t} isArabic={isArabic} currency={currency} compact onPress={onPoints}/>
 
       <View style={styles.gridDetails}>
 
@@ -772,40 +924,25 @@ function PetGridCard({ pet, t, isArabic, isCompact, onManage, onEditSubscription
 
       </Pressable>
 
-      <Pressable onPress={onEditSubscription} style={[
-            styles.gridAction,
-            isArabic &&
-                styles.rowRtl,
-        ]}>
-
-        <Ionicons name={actionIcon} size={18} color={COLORS.primary}/>
-
-        <Text numberOfLines={2} style={[
-            styles.actionText,
-            isCompact &&
-                styles.actionTextCompact,
-        ]}>
-
-          {actionLabel}
-
-        </Text>
-
-      </Pressable>
-
-    </View>);
+    </Pressable>);
 }
-function PetAvatar({ pet, mode, isCompact, }: {
+function PetAvatar({ pet, mode, isCompact, premium, }: {
     pet: Pet;
     mode: ViewMode;
     isCompact: boolean;
+    premium?: boolean;
 }) {
-    const containerStyle = mode === "grid"
-        ? styles.gridAvatar
-        : [
-            styles.listAvatar,
-            isCompact &&
-                styles.listAvatarCompact,
-        ];
+    const containerStyle = [
+        mode === "grid"
+            ? styles.gridAvatar
+            : [
+                styles.listAvatar,
+                isCompact &&
+                    styles.listAvatarCompact,
+            ],
+        premium &&
+            styles.avatarPremium,
+    ];
     if (pet.photo_url) {
         return (<View style={containerStyle}>
 
@@ -1261,6 +1398,114 @@ const styles = StyleSheet.create({
         fontSize: 11,
         color: COLORS.danger,
     },
+    cardPressed: {
+        opacity: 0.85,
+    },
+    // PREMIUM pet: gold border on the photo + badge only
+    avatarPremium: {
+        borderColor: GOLD.border,
+    },
+    premiumWrap: {
+        marginTop: 6,
+        marginBottom: 4,
+        gap: 6,
+    },
+    premiumBadge: {
+        alignSelf: "flex-start",
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 5,
+        paddingHorizontal: 10,
+        paddingVertical: 3,
+        borderRadius: 999,
+        backgroundColor: GOLD.main,
+    },
+    premiumBadgeRtl: {
+        alignSelf: "flex-end",
+    },
+    premiumBadgeText: {
+        fontFamily: "Cairo_700Bold",
+        fontSize: 12,
+        lineHeight: 18,
+        color: "#FFFFFF",
+    },
+    premiumNote: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+    },
+    premiumNoteText: {
+        flex: 1,
+        fontFamily: "Cairo_700Bold",
+        fontSize: 12,
+        lineHeight: 18,
+        color: GOLD.dark,
+    },
+    // LOYALTY POINTS
+    pointsTotal: {
+        alignSelf: "flex-start",
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 5,
+        marginTop: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 3,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: POINTS.border,
+        backgroundColor: POINTS.light,
+    },
+    pointsTotalRtl: {
+        alignSelf: "flex-end",
+        flexDirection: "row-reverse",
+    },
+    pointsTotalText: {
+        fontFamily: "Cairo_700Bold",
+        fontSize: 12.5,
+        color: POINTS.dark,
+    },
+    pointsRow: {
+        alignSelf: "flex-start",
+        maxWidth: "100%",
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 5,
+        marginTop: 6,
+        marginBottom: 4,
+        paddingHorizontal: 9,
+        paddingVertical: 2,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: POINTS.border,
+        backgroundColor: POINTS.light,
+    },
+    pointsRowUsable: {
+        borderColor: "#86C9A0",
+        backgroundColor: "#ECF8F0",
+    },
+    pointsRowDanger: {
+        borderColor: "#F0A8A0",
+        backgroundColor: "#FDECEA",
+    },
+    pointsValue: {
+        fontFamily: "Cairo_700Bold",
+        fontSize: 12,
+        lineHeight: 18,
+        color: COLORS.text,
+    },
+    pointsDetail: {
+        flexShrink: 1,
+        fontFamily: "Cairo_500Medium",
+        fontSize: 11.5,
+        lineHeight: 18,
+        color: POINTS.dark,
+    },
+    pointsDetailUsable: {
+        color: "#15803D",
+    },
+    pointsDetailDanger: {
+        color: COLORS.danger,
+    },
     rowRtl: {
         flexDirection: "row-reverse",
     },
@@ -1269,4 +1514,3 @@ const styles = StyleSheet.create({
         writingDirection: "rtl",
     },
 });
-

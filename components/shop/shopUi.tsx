@@ -75,7 +75,9 @@ export function ProductBadges({ product, isArabic }: { product: ShopProduct; isA
     badges.push({ label: isArabic ? "تجربة" : "Trial", color: PCOLORS.primary, background: PCOLORS.primaryLight });
   }
 
-  if (product.is_premium) {
+  if (product.requires_consultation) {
+    badges.push({ label: isArabic ? "👑 مخصصة" : "👑 Personalized", color: PCOLORS.white, background: "#B8860B" });
+  } else if (product.is_premium) {
     badges.push({ label: isArabic ? "بريميوم" : "Premium", color: PCOLORS.white, background: PCOLORS.dark });
   }
 
@@ -86,6 +88,82 @@ export function ProductBadges({ product, isArabic }: { product: ShopProduct; isA
       {badges.map(badge => (
         <View key={badge.label} style={[styles.badge, { backgroundColor: badge.background }]}>
           <Text style={[styles.badgeText, { color: badge.color }]}>{badge.label}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
+| PERSONALIZED PACK NOTE (PREMIUM-...)
+|--------------------------------------------------------------------------
+|
+| Recipes are not chosen by the customer: our team calls him after the
+| purchase and prepares recipes for his pet only.
+|
+*/
+
+export function ConsultationNote({
+  product,
+  isArabic,
+  compact,
+}: {
+  product: ShopProduct;
+  isArabic: boolean;
+  compact?: boolean;
+}) {
+  if (!product.requires_consultation) return null;
+
+  const dir = isArabic ? styles.textRtl : null;
+  const message =
+    product.consultation_message ||
+    (isArabic
+      ? "باقة مخصصة: لا تختار الوصفات ولا مواعيد التوصيل الآن. بعد الشراء يتواصل معك فريق التغذية، ثم نحضّر وصفات خاصة بحيوانك فقط."
+      : "Personalized pack: you do not choose the recipes or the delivery days now. After your purchase our nutrition team contacts you, then we prepare recipes made only for your pet.");
+
+  if (compact) {
+    return (
+      <View style={[styles.noteCompact, isArabic && styles.rowRtl]}>
+        <Ionicons name="call-outline" size={14} color="#8A6400" />
+        <Text style={[styles.noteCompactText, dir]} numberOfLines={2}>
+          {isArabic ? "بعد الشراء يتواصل معك فريقنا ويحضّر وصفات خاصة بحيوانك" : "After your purchase our team contacts you and prepares your pet's own recipes"}
+        </Text>
+      </View>
+    );
+  }
+
+  const steps = isArabic
+    ? [
+        "تشتري الباقة (لا تختار الوصفات ولا أيام التوصيل الآن)",
+        "يتواصل معك فريق التغذية ويستلم معلومات ووثائق حيوانك",
+        "نحضّر وصفات خاصة بحيوانك فقط",
+        "يصلك إشعار: وصفاتك جاهزة، فتختار أيام التوصيل",
+      ]
+    : [
+        "You buy the pack (no recipes or delivery days to choose now)",
+        "Our nutrition team contacts you and receives your pet's documents",
+        "We prepare recipes made only for your pet",
+        "You get a notification: your recipes are ready, you choose your delivery days",
+      ];
+
+  return (
+    <View style={styles.note}>
+      <View style={[styles.noteHeader, isArabic && styles.rowRtl]}>
+        <View style={styles.noteIcon}>
+          <Ionicons name="sparkles" size={18} color={PCOLORS.white} />
+        </View>
+        <Text style={[styles.noteTitle, dir]}>{isArabic ? "باقة مخصصة لحيوانك" : "A pack made for your pet"}</Text>
+      </View>
+
+      <Text style={[styles.noteText, dir]}>{message}</Text>
+
+      {steps.map((step, index) => (
+        <View key={step} style={[styles.noteStep, isArabic && styles.rowRtl]}>
+          <View style={styles.noteNumber}>
+            <Text style={styles.noteNumberText}>{index + 1}</Text>
+          </View>
+          <Text style={[styles.noteStepText, dir]}>{step}</Text>
         </View>
       ))}
     </View>
@@ -157,6 +235,35 @@ export function SignInBanner({ isArabic, redirect }: { isArabic: boolean; redire
 }
 
 const styles = StyleSheet.create({
+  note: {
+    marginTop: 16,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E8C66A",
+    backgroundColor: "#FFF8E5",
+    gap: 8,
+  },
+  noteHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
+  noteIcon: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#B8860B", alignItems: "center", justifyContent: "center" },
+  noteTitle: { flex: 1, fontFamily: FONTS.bold, fontSize: 16, lineHeight: 25, color: PCOLORS.text },
+  noteText: { fontFamily: FONTS.regular, fontSize: 13, lineHeight: 21, color: PCOLORS.text },
+  noteStep: { flexDirection: "row", alignItems: "center", gap: 10 },
+  noteNumber: { width: 22, height: 22, borderRadius: 11, backgroundColor: "#F1DDA0", alignItems: "center", justifyContent: "center" },
+  noteNumberText: { fontFamily: FONTS.bold, fontSize: 12, color: "#8A6400" },
+  noteStepText: { flex: 1, fontFamily: FONTS.medium, fontSize: 13, lineHeight: 21, color: PCOLORS.text },
+  noteCompact: {
+    marginTop: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#FFF8E5",
+  },
+  noteCompactText: { flex: 1, fontFamily: FONTS.medium, fontSize: 12, lineHeight: 18, color: "#8A6400" },
+
   rowRtl: { flexDirection: "row-reverse" },
   textRtl: { textAlign: "right", writingDirection: "rtl" },
   pressed: { opacity: 0.85 },

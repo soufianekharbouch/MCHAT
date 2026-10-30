@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { deleteStoredItem, getStoredItem, setStoredItem } from "./storage";
+import { clearOrderCart } from "./orderCart";
 
 /*
 |--------------------------------------------------------------------------
@@ -9,6 +10,9 @@ import { deleteStoredItem, getStoredItem, setStoredItem } from "./storage";
 | WhatsApp sign in: the token has no expiry, it stays until "Logout".
 | Every screen can know if the user is signed in with useSession(),
 | and is notified when he signs in or out.
+|
+| The order in progress (cart) is emptied at sign in and at logout:
+| a new session always starts with an empty cart.
 |
 */
 
@@ -63,6 +67,9 @@ export async function getSessionToken(): Promise<string | null> {
  * services that still check this date accept the session.
  */
 export async function saveSession(data: { access_token: string; expires_at?: string | null; locale?: string | null }) {
+  // New session: empty cart (never the packs of another account)
+  await clearOrderCart().catch(() => undefined);
+
   await setStoredItem("access_token", data.access_token);
 
   if (data.expires_at) {
@@ -83,6 +90,7 @@ export async function saveSession(data: { access_token: string; expires_at?: str
 /** Logout: the app goes back to visitor mode. */
 export async function clearSession() {
   try {
+    await clearOrderCart().catch(() => undefined);
     await deleteStoredItem("access_token");
     await deleteStoredItem("access_token_expires_at");
     await deleteStoredItem("must_change_password");

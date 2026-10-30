@@ -1,9 +1,10 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Image,
   KeyboardAvoidingView,
+  LayoutAnimation,
   Modal,
   Platform,
   Pressable,
@@ -12,6 +13,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  UIManager,
   View,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -27,6 +29,45 @@ import type { CatalogAnimal, PaymentMethod, PaymentMethodOption, Product } from 
 import { BackRow, CenteredLoader, ErrorState, PageTitle, PrimaryButton } from "../../components/purchase/ScreenParts";
 import { formatPrice } from "../../components/purchase/SubscriptionCard";
 import { FONTS, PCOLORS, formatDate, purchaseTexts } from "../../components/purchase/purchaseUtils";
+import { ConsultationNote } from "../../components/shop/shopUi";
+import ProductDescription from "../../components/shop/ProductDescription";
+import { getOrderCart, type OrderCartItem } from "../../services/orderCart";
+
+/*
+ * Kinds of packs (product code), one section each, in the order sent
+ * by the server (it depends on what the customer already bought):
+ *   REG-      subscription packs
+ *   TP-       taste packs (to try our recipes)
+ *   PREMIUM-  custom recipes (our team contacts the customer)
+ */
+type PackKind = "REG" | "TP" | "PREMIUM" | "OTHER";
+
+function packKind(code?: string | null): PackKind {
+  const value = String(code || "").trim().toUpperCase();
+
+  if (value.startsWith("REG-")) return "REG";
+  if (value.startsWith("TP-")) return "TP";
+  if (value.startsWith("PREMIUM-")) return "PREMIUM";
+
+  return "OTHER";
+}
+
+const KIND_ICON: Record<PackKind, React.ComponentProps<typeof Ionicons>["name"]> = {
+  REG: "calendar-outline",
+  TP: "gift-outline",
+  PREMIUM: "diamond-outline",
+  OTHER: "basket-outline",
+};
+
+if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+const GOLD = { main: "#B8860B", dark: "#6B4E00", border: "#C9A227", light: "#FFF9EC" };
+
+/** PREMIUM-... pack: recipes and delivery days chosen by our team (API flag). */
+const isPremiumPack = (product: Product) =>
+  !!(product as Product & { requires_consultation?: boolean }).requires_consultation || packKind((product as Product & { code?: string }).code) === "PREMIUM";
 
 /*
 |--------------------------------------------------------------------------
@@ -47,7 +88,11 @@ export default function PlansScreen() {
   const lang = isArabic ? "ar" : "en";
   const base = purchaseTexts(isArabic);
 
-  const params = useLocalSearchParams<{ animalId?: string }>();
+  // newPetName: pet just created in the checkout (its id was not returned)
+  const params = useLocalSearchParams<{ animalId?: string; newPetName?: string }>();
+
+  // Always open at the top of the page
+  const scrollRef = useRef<ScrollView>(null);
 
   const t = isArabic
     ? {
@@ -80,6 +125,22 @@ export default function PlansScreen() {
         until: "حتى",
         trialRunning: "قبل نهاية الباقة التجريبية",
         ages: "مناسبة لـ",
+        chooseTaste: "جرّب هذه الباقة",
+        orderInProgress: (n: number) => (n === 1 ? "طلبك قيد الإعداد: حيوان واحد" : `طلبك قيد الإعداد: ${n} حيوانات`),
+        orderInProgressText: "اختر باقة لحيوان آخر، أو أكمل الطلب وادفع للجميع مرة واحدة.",
+        completeOrder: "إكمال الطلب",
+        inOrder: "في الطلب",
+        showDetails: "عرض التفاصيل",
+        hideDetails: "إخفاء التفاصيل",
+        premiumPet: "بريميوم",
+        choosePremium: "اطلب باقتك المخصصة",
+        premiumRibbon: "باقة مخصصة · بريميوم",
+        sections: {
+          REG: { title: "باقات الاشتراك", text: "وجباتك الطازجة كل شهر، توصيل منتظم إلى بابك." },
+          TP: { title: "باقات التذوق", text: "ليجرّب حيوانك وصفاتنا قبل الاشتراك." },
+          PREMIUM: { title: "وصفات مخصصة", text: "وصفات يحضّرها فريق التغذية لحيوانك فقط." },
+          OTHER: { title: "باقات أخرى", text: "" },
+        },
       }
     : {
         title: "Choose a Plan",
@@ -111,6 +172,22 @@ export default function PlansScreen() {
         until: "until",
         trialRunning: "before the end of the trial pack",
         ages: "Suited for",
+        chooseTaste: "Try this pack",
+        orderInProgress: (n: number) => (n === 1 ? "Order in progress: 1 pet" : `Order in progress: ${n} pets`),
+        orderInProgressText: "Choose a plan for another pet, or complete your order and pay for everyone at once.",
+        completeOrder: "Complete my order",
+        inOrder: "In order",
+        showDetails: "Show details",
+        hideDetails: "Hide details",
+        premiumPet: "Premium",
+        choosePremium: "Get my custom pack",
+        premiumRibbon: "PERSONALIZED · PREMIUM",
+        sections: {
+          REG: { title: "Subscription packs", text: "Your fresh meals every month, delivered to your door." },
+          TP: { title: "Taste packs", text: "Let your pet try our recipes before subscribing." },
+          PREMIUM: { title: "Custom recipes", text: "Recipes prepared by our nutrition team for your pet only." },
+          OTHER: { title: "Other packs", text: "" },
+        },
       };
 
   const [animals, setAnimals] = useState<CatalogAnimal[]>([]);
@@ -150,8 +227,19 @@ export default function PlansScreen() {
       setAnimals(data.animals);
       setPaymentMethods(data.payment_methods);
 
+      // Pet asked in the params first (plans opened for this pet)
+      const wanted = params.animalId
+        ? data.animals.find(a => a.id === Number(params.animalId))
+        : params.newPetName
+          ? [...data.animals].reverse().find(a => a.name === params.newPetName)
+          : null;
+
       setSelectedAnimalId(current =>
-        current && data.animals.some(a => a.id === current) ? current : data.animals[0]?.id ?? null
+        wanted
+          ? wanted.id
+          : current && data.animals.some(a => a.id === current)
+            ? current
+            : data.animals[0]?.id ?? null
       );
     } catch (e: any) {
       setError(e?.message || base.error);
@@ -159,18 +247,56 @@ export default function PlansScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [lang]);
+  }, [lang, params.animalId, params.newPetName]);
 
   useFocusEffect(
     useCallback(() => {
+      scrollRef.current?.scrollTo({ y: 0, animated: false });
       void load();
     }, [load])
   );
+
+  // Order in progress (plans already chosen for other pets, paid together)
+  const [cart, setCart] = useState<OrderCartItem[]>([]);
+
+  useFocusEffect(
+    useCallback(() => {
+      getOrderCart().then(setCart).catch(() => setCart([]));
+    }, [])
+  );
+
+  const completeOrder = () => {
+    const first = cart[0];
+    if (!first) return;
+
+    router.push({
+      pathname: "/checkout",
+      params: { productId: String(first.productId), animalId: String(first.animalId), quantity: String(first.quantity) },
+    } as any);
+  };
 
   const animal = useMemo(
     () => animals.find(a => a.id === selectedAnimalId) ?? null,
     [animals, selectedAnimalId]
   );
+
+  // Sections REG- / TP- / PREMIUM-, in the order of the server
+  const sections = useMemo(() => {
+    const list: { kind: PackKind; products: Product[] }[] = [];
+
+    (animal?.products ?? []).forEach(product => {
+      const kind = packKind((product as Product & { code?: string }).code);
+      const section = list.find(item => item.kind === kind);
+
+      if (section) {
+        section.products.push(product);
+      } else {
+        list.push({ kind, products: [product] });
+      }
+    });
+
+    return list;
+  }, [animal]);
 
   /*
   |--------------------------------------------------------------------------
@@ -178,11 +304,28 @@ export default function PlansScreen() {
   |--------------------------------------------------------------------------
   */
 
+  /*
+   * "Choose this plan": the shop checkout, with this pet already selected.
+   * There the customer can add his other pets (one payment for all,
+   * multi-pet discount). The old one-pet popup below is kept as fallback.
+   */
   const openCheckout = (product: Product) => {
+    router.push({
+      pathname: "/checkout",
+      params: {
+        productId: String(product.id),
+        ...(animal ? { animalId: String(animal.id) } : {}),
+      },
+    } as any);
+  };
+
+  // Old popup (one pet, one payment): not used any more
+  const openSinglePetCheckout = (product: Product) => {
     setCheckoutProduct(product);
     setPaymentMethod(paymentMethods[0]?.value ?? null);
     setNote("");
   };
+  void openSinglePetCheckout;
 
   const confirmPurchase = async () => {
     if (!checkoutProduct || !animal || !paymentMethod || submitting) return;
@@ -250,6 +393,7 @@ export default function PlansScreen() {
   return (
     <SafeAreaView edges={["left", "right"]} style={styles.safeArea}>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.page}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -266,13 +410,30 @@ export default function PlansScreen() {
         <BackRow label={base.back} isArabic={isArabic} />
         <PageTitle title={t.title} subtitle={t.subtitle} isArabic={isArabic} />
 
+        {/* ORDER IN PROGRESS: several pets, one payment */}
+        {cart.length > 0 && (
+          <View style={styles.orderBanner}>
+            <View style={[styles.orderBannerRow, isArabic && styles.rowRtl]}>
+              <Ionicons name="bag-check-outline" size={22} color={PCOLORS.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.orderBannerTitle, isArabic && styles.textRtl]}>{t.orderInProgress(cart.length)}</Text>
+                <Text style={[styles.orderBannerText, isArabic && styles.textRtl]}>
+                  {cart.map(item => item.petName).filter(Boolean).join(isArabic ? "، " : ", ")}
+                </Text>
+                <Text style={[styles.orderBannerText, isArabic && styles.textRtl]}>{t.orderInProgressText}</Text>
+              </View>
+            </View>
+            <PrimaryButton label={t.completeOrder} icon="arrow-forward" onPress={completeOrder} />
+          </View>
+        )}
+
         {!!error && <ErrorState message={error} retryLabel={base.retry} onRetry={load} />}
 
         {!error && animals.length === 0 && (
           <View style={styles.empty}>
             <Ionicons name="paw-outline" size={38} color={PCOLORS.primary} />
             <Text style={styles.emptyText}>{t.noPets}</Text>
-            <PrimaryButton label={t.addPet} icon="add" onPress={() => router.push("/pet-form")} />
+            <PrimaryButton label={t.addPet} icon="add" onPress={() => router.push({ pathname: "/pet-form", params: { id: "" } })} />
           </View>
         )}
 
@@ -291,8 +452,16 @@ export default function PlansScreen() {
                 return (
                   <Pressable
                     key={a.id}
-                    onPress={() => setSelectedAnimalId(a.id)}
-                    style={[styles.petChip, active && styles.petChipActive, isArabic && styles.rowRtl]}
+                    onPress={() => {
+                      setSelectedAnimalId(a.id);
+                      scrollRef.current?.scrollTo({ y: 0, animated: true });
+                    }}
+                    style={[
+                      styles.petChip,
+                      !!(a as CatalogAnimal & { is_premium_pet?: boolean }).is_premium_pet && styles.petChipPremium,
+                      active && styles.petChipActive,
+                      isArabic && styles.rowRtl,
+                    ]}
                   >
                     {a.photo_url ? (
                       <Image source={{ uri: a.photo_url }} style={styles.petChipPhoto} />
@@ -304,6 +473,12 @@ export default function PlansScreen() {
                       />
                     )}
                     <Text style={[styles.petChipText, active && styles.petChipTextActive]}>{a.name}</Text>
+                    {cart.some(item => item.animalId === a.id) && (
+                      <Ionicons name="checkmark-circle" size={16} color={active ? PCOLORS.white : PCOLORS.primary} />
+                    )}
+                    {!!(a as CatalogAnimal & { is_premium_pet?: boolean }).is_premium_pet && (
+                      <MaterialCommunityIcons name="crown" size={15} color={active ? PCOLORS.white : GOLD.main} />
+                    )}
                   </Pressable>
                 );
               })}
@@ -323,6 +498,13 @@ export default function PlansScreen() {
               {t.plansFor} <Text style={styles.petInfoStrong}>{animal.name}</Text>
               {animal.age_label ? ` · ${animal.age_label}` : ""}
             </Text>
+            {/* Pet with a PREMIUM-... pack */}
+            {!!(animal as CatalogAnimal & { is_premium_pet?: boolean }).is_premium_pet && (
+              <View style={[styles.badge, styles.badgePremiumSolid]}>
+                <MaterialCommunityIcons name="crown" size={12} color={PCOLORS.white} />
+                <Text style={[styles.badgeText, { color: PCOLORS.white }]}>{t.premiumPet}</Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -350,14 +532,34 @@ export default function PlansScreen() {
           </View>
         )}
 
-        {animal?.products.map(product => (
-          <ProductCard
-            key={product.id}
-            product={product}
-            t={t}
-            isArabic={isArabic}
-            onChoose={() => openCheckout(product)}
-          />
+        {sections.map(section => (
+          <View key={section.kind} style={styles.section}>
+            {/* SECTION HEADER */}
+            <View style={[styles.sectionHeader, isArabic && styles.rowRtl]}>
+              <View style={[styles.sectionIcon, section.kind === "PREMIUM" && styles.sectionIconPremium]}>
+                <Ionicons name={KIND_ICON[section.kind]} size={18} color={PCOLORS.white} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.sectionTitle, section.kind === "PREMIUM" && styles.sectionTitlePremium, isArabic && styles.textRtl]}>
+                  {t.sections[section.kind].title}
+                </Text>
+                {!!t.sections[section.kind].text && (
+                  <Text style={[styles.sectionText, isArabic && styles.textRtl]}>{t.sections[section.kind].text}</Text>
+                )}
+              </View>
+            </View>
+
+            {section.products.map(product => (
+              <ProductCard
+                key={product.id}
+                product={product}
+                kind={section.kind}
+                t={t}
+                isArabic={isArabic}
+                onChoose={() => openCheckout(product)}
+              />
+            ))}
+          </View>
         ))}
       </ScrollView>
 
@@ -402,6 +604,13 @@ export default function PlansScreen() {
                       </Text>
                     )}
                   </View>
+
+                  {/* PREMIUM-... : told BEFORE paying (no recipes / days to choose) */}
+                  {isPremiumPack(checkoutProduct) && (
+                    <View style={{ marginTop: -6, marginBottom: 16 }}>
+                      <ConsultationNote product={{ ...(checkoutProduct as any), requires_consultation: true }} isArabic={isArabic} />
+                    </View>
+                  )}
 
                   <Text style={[styles.sectionLabel, isArabic && styles.textRtl]}>{t.paymentMethod}</Text>
 
@@ -489,15 +698,20 @@ export default function PlansScreen() {
 
 function ProductCard({
   product,
+  kind,
   t,
   isArabic,
   onChoose,
 }: {
   product: Product;
+  kind: PackKind;
   t: any;
   isArabic: boolean;
   onChoose: () => void;
 }) {
+  const premium = isPremiumPack(product);
+  const [open, setOpen] = useState(false);
+
   const rtl = isArabic ? styles.textRtl : null;
   const rules = product.rules;
 
@@ -513,76 +727,143 @@ function ProductCard({
 
   const trialOffer = product.trial_offer?.active ? product.trial_offer : null;
 
+  const toggle = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setOpen(value => !value);
+  };
+
   return (
-    <View style={[styles.productCard, trialOffer && styles.productCardOffer]}>
-      {!!product.image_url && <Image source={{ uri: product.image_url }} style={styles.productImage} />}
+    <View style={[styles.productCard, trialOffer && styles.productCardOffer, premium && styles.productCardPremium]}>
+      {/* PREMIUM-... : own style */}
+      {premium && (
+        <View style={[styles.premiumRibbon, isArabic && styles.rowRtl]}>
+          <Ionicons name="diamond-outline" size={15} color={PCOLORS.white} />
+          <Text style={styles.premiumRibbonText}>{t.premiumRibbon}</Text>
+        </View>
+      )}
 
-      <View style={[styles.badges, isArabic && styles.rowRtl]}>
-        {product.is_premium && (
-          <View style={[styles.badge, styles.badgePremium]}>
-            <MaterialCommunityIcons name="crown-outline" size={13} color="#8A6D1F" />
-            <Text style={[styles.badgeText, { color: "#8A6D1F" }]}>Premium</Text>
+      {/* COMPACT PART: image, badges, name, price, meals / duration */}
+      <View style={[styles.compactRow, isArabic && styles.rowRtl]}>
+        {product.image_url ? (
+          <Image source={{ uri: product.image_url }} style={styles.productThumb} />
+        ) : (
+          <View style={[styles.productThumb, styles.productThumbEmpty]}>
+            <MaterialCommunityIcons name="food-variant" size={30} color={premium ? GOLD.main : PCOLORS.primary} />
           </View>
         )}
-        {product.is_trial && (
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{t.trial}</Text>
+
+        <View style={{ flex: 1 }}>
+          <View style={[styles.badges, isArabic && styles.rowRtl]}>
+            {premium && (
+              <View style={[styles.badge, styles.badgePremiumSolid]}>
+                <MaterialCommunityIcons name="crown" size={12} color={PCOLORS.white} />
+                <Text style={[styles.badgeText, { color: PCOLORS.white }]}>Premium</Text>
+              </View>
+            )}
+            {product.is_premium && !premium && (
+              <View style={[styles.badge, styles.badgePremium]}>
+                <MaterialCommunityIcons name="crown-outline" size={12} color="#8A6D1F" />
+                <Text style={[styles.badgeText, { color: "#8A6D1F" }]}>Premium</Text>
+              </View>
+            )}
+            {product.is_trial && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{t.trial}</Text>
+              </View>
+            )}
+            {!!trialOffer && (
+              <View style={[styles.badge, styles.badgeOffer]}>
+                <MaterialCommunityIcons name="gift-outline" size={12} color={PCOLORS.white} />
+                <Text style={[styles.badgeText, { color: PCOLORS.white }]}>{t.trialOffer}</Text>
+              </View>
+            )}
+            {product.has_promo && (
+              <View style={[styles.badge, styles.badgePromo]}>
+                <Text style={[styles.badgeText, { color: PCOLORS.white }]}>
+                  {t.save} {product.discount_percent}%
+                </Text>
+              </View>
+            )}
           </View>
-        )}
-        {!!trialOffer && (
-          <View style={[styles.badge, styles.badgeOffer]}>
-            <MaterialCommunityIcons name="gift-outline" size={13} color={PCOLORS.white} />
-            <Text style={[styles.badgeText, { color: PCOLORS.white }]}>{t.trialOffer}</Text>
-          </View>
-        )}
-        {product.has_promo && (
-          <View style={[styles.badge, styles.badgePromo]}>
-            <Text style={[styles.badgeText, { color: PCOLORS.white }]}>
-              {t.save} {product.discount_percent}%
-            </Text>
-          </View>
-        )}
+
+          <Text style={[styles.productName, premium && styles.productNamePremium, rtl]} numberOfLines={2}>
+            {product.name}
+          </Text>
+
+          <Text style={[styles.compactMeta, rtl]} numberOfLines={1}>
+            {product.total_recipes} {t.recipes} · {product.duration_label}
+          </Text>
+        </View>
       </View>
-
-      <Text style={[styles.productName, rtl]}>{product.name}</Text>
-      {!!product.description && <Text style={[styles.productDescription, rtl]}>{product.description}</Text>}
 
       {/* PRICE */}
       <View style={[styles.priceRow, isArabic && styles.rowRtl]}>
-        <Text style={styles.priceValue}>{formatPrice(product.current_price)}</Text>
+        <Text style={[styles.priceValue, premium && styles.priceValuePremium]}>{formatPrice(product.current_price)}</Text>
         <Text style={styles.priceCurrency}>{product.currency}</Text>
         {product.has_promo && <Text style={styles.priceOld}>{formatPrice(product.price)}</Text>}
-      </View>
-      <Text style={[styles.pricePerMeal, rtl]}>
-        {formatPrice(product.price_per_recipe)} {product.currency} {t.perMeal}
-      </Text>
-      {!!trialOffer && (
-        <Text style={[styles.offerNote, rtl]}>
-          {t.trialRunning}
-          {trialOffer.ends_on ? ` · ${t.until} ${formatDate(trialOffer.ends_on, isArabic)}` : ""}
+        <View style={{ flex: 1 }} />
+        <Text style={styles.pricePerMeal}>
+          {formatPrice(product.price_per_recipe)} {t.perMeal}
         </Text>
-      )}
-
-      {/* FACTS */}
-      <View style={styles.facts}>
-        <Fact icon="food-variant" text={`${product.total_recipes} ${t.recipes} · ${product.duration_label}`} isArabic={isArabic} />
-        <Fact icon="truck-outline" text={`${deliveries} ${t.deliveries}`} isArabic={isArabic} />
-        <Fact icon="package-variant-closed" text={`${perDelivery} ${t.perDelivery}`} isArabic={isArabic} />
-        {!!product.life_stages?.length && !!product.life_stages_label && (
-          <Fact icon="cake-variant-outline" text={`${t.ages} ${product.life_stages_label}`} isArabic={isArabic} />
-        )}
       </View>
 
-      {product.recipes.length > 0 && (
-        <>
-          <Text style={[styles.recipesTitle, rtl]}>{t.recipesIncluded}</Text>
-          <Text style={[styles.recipesText, rtl]}>{product.recipes.map(r => r.name).join(" · ")}</Text>
-        </>
+      {/* PREMIUM-... : short note always visible */}
+      {premium && (
+        <ConsultationNote product={{ ...(product as any), requires_consultation: true }} isArabic={isArabic} compact />
       )}
 
-      <View style={{ marginTop: 22 }}>
+      {/* DETAILS (collapse) */}
+      <Pressable onPress={toggle} hitSlop={6} style={[styles.detailsToggle, isArabic && styles.rowRtl]}>
+        <Text style={[styles.detailsToggleText, premium && { color: GOLD.dark }]}>{open ? t.hideDetails : t.showDetails}</Text>
+        <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={premium ? GOLD.dark : PCOLORS.primary} />
+      </Pressable>
+
+      {open && (
+        <View style={styles.detailsBox}>
+          {!!product.description &&
+            (/^\s*#/m.test(product.description) ? (
+              <ProductDescription key={product.id} description={product.description} isArabic={isArabic} />
+            ) : (
+              <Text style={[styles.productDescription, rtl]}>{product.description}</Text>
+            ))}
+
+          {premium && <ConsultationNote product={{ ...(product as any), requires_consultation: true }} isArabic={isArabic} />}
+
+          {!!trialOffer && (
+            <Text style={[styles.offerNote, rtl]}>
+              {t.trialRunning}
+              {trialOffer.ends_on ? ` · ${t.until} ${formatDate(trialOffer.ends_on, isArabic)}` : ""}
+            </Text>
+          )}
+
+          <View style={styles.facts}>
+            <Fact icon="truck-outline" text={`${deliveries} ${t.deliveries}`} isArabic={isArabic} />
+            <Fact icon="package-variant-closed" text={`${perDelivery} ${t.perDelivery}`} isArabic={isArabic} />
+            {!!product.life_stages?.length && !!product.life_stages_label && (
+              <Fact icon="cake-variant-outline" text={`${t.ages} ${product.life_stages_label}`} isArabic={isArabic} />
+            )}
+          </View>
+
+          {product.recipes.length > 0 && !premium && (
+            <>
+              <Text style={[styles.recipesTitle, rtl]}>{t.recipesIncluded}</Text>
+              <Text style={[styles.recipesText, rtl]}>{product.recipes.map(r => r.name).join(" · ")}</Text>
+            </>
+          )}
+        </View>
+      )}
+
+      <View style={{ marginTop: 14 }}>
         <PrimaryButton
-          label={product.can_purchase ? t.choose : t.limitReached}
+          label={
+            !product.can_purchase
+              ? t.limitReached
+              : kind === "TP"
+                ? t.chooseTaste
+                : kind === "PREMIUM"
+                  ? t.choosePremium
+                  : t.choose
+          }
           onPress={onChoose}
           disabled={!product.can_purchase}
         />
@@ -660,8 +941,8 @@ const styles = StyleSheet.create({
   petChipTextActive: { color: PCOLORS.white },
 
   productCard: {
-    marginBottom: 22,
-    padding: 22,
+    marginBottom: 16,
+    padding: 16,
     borderTopWidth: 3,
     borderTopColor: PCOLORS.primary,
     backgroundColor: PCOLORS.card,
@@ -672,7 +953,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 16,
   },
-  badges: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
+  badges: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 6 },
   badge: {
     flexDirection: "row",
     alignItems: "center",
@@ -736,7 +1017,78 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontFamily: FONTS.semiBold, fontSize: 11, color: PCOLORS.primary },
 
-  productName: { fontFamily: FONTS.bold, fontSize: 24, lineHeight: 32, color: PCOLORS.text },
+  // Order in progress
+  orderBanner: {
+    marginBottom: 18,
+    padding: 14,
+    gap: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#A8D7D1",
+    backgroundColor: PCOLORS.primaryLight,
+  },
+  orderBannerRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  orderBannerTitle: { fontFamily: FONTS.bold, fontSize: 15, color: PCOLORS.text },
+  orderBannerText: { marginTop: 2, fontFamily: FONTS.regular, fontSize: 12.5, lineHeight: 19, color: PCOLORS.muted },
+
+  // Sections REG- / TP- / PREMIUM-
+  section: { marginBottom: 6 },
+  sectionHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4, marginBottom: 14 },
+  sectionIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: PCOLORS.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sectionIconPremium: { backgroundColor: GOLD.main },
+  sectionTitle: { fontFamily: FONTS.extraBold, fontSize: 19, lineHeight: 28, color: PCOLORS.text },
+  sectionTitlePremium: { color: GOLD.dark },
+  sectionText: { fontFamily: FONTS.regular, fontSize: 13, lineHeight: 20, color: PCOLORS.muted },
+
+  // PREMIUM-... card
+  productCardPremium: {
+    borderTopColor: GOLD.main,
+    borderWidth: 2,
+    borderColor: GOLD.border,
+    backgroundColor: GOLD.light,
+    paddingTop: 0,
+    overflow: "hidden",
+  },
+  premiumRibbon: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginHorizontal: -16,
+    marginBottom: 14,
+    paddingVertical: 7,
+    backgroundColor: GOLD.main,
+  },
+  premiumRibbonText: { fontFamily: FONTS.bold, fontSize: 13, letterSpacing: 0.5, color: PCOLORS.white },
+  productNamePremium: { color: GOLD.dark },
+  badgePremiumSolid: { backgroundColor: GOLD.main },
+  petChipPremium: { borderColor: GOLD.border, borderWidth: 2 },
+  priceValuePremium: { color: GOLD.dark },
+
+  // Compact card
+  compactRow: { flexDirection: "row", alignItems: "flex-start", gap: 14 },
+  productThumb: { width: 84, height: 84, borderRadius: 10 },
+  productThumbEmpty: { backgroundColor: PCOLORS.primaryLight, alignItems: "center", justifyContent: "center" },
+  compactMeta: { marginTop: 2, fontFamily: FONTS.semiBold, fontSize: 13, color: PCOLORS.muted },
+  detailsToggle: {
+    marginTop: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 6,
+  },
+  detailsToggleText: { fontFamily: FONTS.bold, fontSize: 13, color: PCOLORS.primary },
+  detailsBox: { marginTop: 4 },
+
+  productName: { fontFamily: FONTS.bold, fontSize: 17, lineHeight: 25, color: PCOLORS.text },
   productDescription: {
     marginTop: 8,
     fontFamily: FONTS.regular,
@@ -745,8 +1097,8 @@ const styles = StyleSheet.create({
     color: PCOLORS.muted,
   },
 
-  priceRow: { flexDirection: "row", alignItems: "baseline", gap: 7, marginTop: 18 },
-  priceValue: { fontFamily: FONTS.medium, fontSize: 36, lineHeight: 44, color: PCOLORS.text },
+  priceRow: { flexDirection: "row", alignItems: "baseline", gap: 7, marginTop: 12 },
+  priceValue: { fontFamily: FONTS.extraBold, fontSize: 28, lineHeight: 36, color: PCOLORS.text },
   priceCurrency: { fontFamily: FONTS.medium, fontSize: 13, color: PCOLORS.text },
   priceOld: {
     marginLeft: 6,

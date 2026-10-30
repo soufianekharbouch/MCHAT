@@ -65,11 +65,20 @@ import type {
 
 import SubscriptionCard from "../../components/purchase/SubscriptionCard";
 
+import {
+  fetchLoyalty,
+  levelIcon,
+  type LoyaltyResponse,
+} from "../../services/loyaltyApi";
+
 /*
 |--------------------------------------------------------------------------
 | COLORS
 |--------------------------------------------------------------------------
 */
+
+// Loyalty points color
+const POINTS_GOLD = "#D4A017";
 
 const COLORS = {
   background: "#F4F1EC",
@@ -229,6 +238,9 @@ export default function PetFormScreen() {
 
         editSubscription: "تعديل / تغيير الاشتراك",
         renewSubscription: "تجديد الاشتراك",
+        extendSubscription: "مدّد اشتراكك",
+        switchToSubscription: "انتقل إلى الاشتراك",
+        premiumSubscription: "اشتراك بريميوم",
         pausePlan: "إيقاف الخطة مؤقتاً",
         cancelPlan: "إلغاء الخطة",
 
@@ -272,6 +284,20 @@ export default function PetFormScreen() {
         noPlanText: "اختر باقة وجبات طازجة لهذا الحيوان، ثم حدد مواعيد التوصيل.",
         choosePlan: "اختيار باقة",
         planHistory: "الباقات السابقة",
+
+        pointsTitle: "نقاط الولاء",
+        points: "نقطة",
+        pointsUsable: (n: number, amount: string) => `${n} نقطة قابلة للاستخدام = خصم ${amount}`,
+        pointsMissing: (n: number) => `${n} نقطة أخرى لاستخدامها على الباقة القادمة`,
+        pointsExpire: (date: string, days: number) => `تنتهي في ${date} (${days} يوم) بدون باقة جديدة`,
+        pointsNext: (n: number) => `باقتك القادمة: +${n} نقطة`,
+        pointsTrial: (date: string) => `اشترك قبل ${date} للاحتفاظ بنقاط باقة التذوق`,
+        pointsUse: "استخدام نقاطي",
+        pointsMore: "التفاصيل",
+        pendingTitle: "بانتظار الدفع",
+        pendingText: "لم يتم تأكيد دفع هذه الباقة بعد. تواصل مع الدعم إذا تم خصم المبلغ.",
+        contactSupport: "تواصل مع الدعم",
+        ok: "حسناً",
       }
 
     : {
@@ -322,6 +348,9 @@ export default function PetFormScreen() {
 
         editSubscription: "Edit / Change Subscription",
         renewSubscription: "Renew Subscription",
+        extendSubscription: "Extend your subscription",
+        switchToSubscription: "Switch to a subscription",
+        premiumSubscription: "Premium subscription",
         pausePlan: "Pause Plan",
         cancelPlan: "Cancel Plan",
 
@@ -368,6 +397,20 @@ export default function PetFormScreen() {
         noPlanText: "Choose a fresh meal plan for this pet, then pick your delivery dates.",
         choosePlan: "Choose a plan",
         planHistory: "Previous plans",
+
+        pointsTitle: "Loyalty points",
+        points: "pts",
+        pointsUsable: (n: number, amount: string) => `${n} points usable = ${amount} off`,
+        pointsMissing: (n: number) => `${n} more points to use them on the next pack`,
+        pointsExpire: (date: string, days: number) => `Lost on ${date} (${days} days) without a new plan`,
+        pointsNext: (n: number) => `Next pack: +${n} pts`,
+        pointsTrial: (date: string) => `Subscribe before ${date} to keep the taste pack points`,
+        pointsUse: "Use my points",
+        pointsMore: "Details",
+        pendingTitle: "Awaiting payment",
+        pendingText: "The payment of this pack is not confirmed yet. Contact us if you were charged.",
+        contactSupport: "Contact support",
+        ok: "OK",
       };
 
   /*
@@ -500,11 +543,118 @@ export default function PetFormScreen() {
       params: petId ? { animalId: String(petId) } : {},
     });
 
-  const openPurchase = (purchase: PurchaseSummary) =>
+  /*
+   * PREMIUM-... pack: "Premium subscription" instead of the product name
+   * (the custom product created by our team is only for this pet).
+   */
+  const isPremiumPurchase = (purchase: PurchaseSummary) =>
+    !!(purchase as PurchaseSummary & { is_personalized?: boolean }).is_personalized ||
+    String((purchase.product as any)?.code || "").toUpperCase().startsWith("PREMIUM-");
+
+  const displayPurchase = (purchase: PurchaseSummary): PurchaseSummary =>
+    isPremiumPurchase(purchase)
+      ? { ...purchase, product: { ...purchase.product, name: t.premiumSubscription } }
+      : purchase;
+
+  /*
+   * Button under the subscription card:
+   *  - taste pack (TP-)            -> Switch to a subscription
+   *  - plan still running          -> Extend your subscription
+   *  - plan finished               -> Renew subscription
+   *  - waiting for payment         -> no button
+   */
+  const renewLabelFor = (purchase: PurchaseSummary): string | null => {
+    if (purchase.status === "pending") {
+      return null;
+    }
+
+    const isTaste =
+      !!(purchase.product as any)?.is_trial ||
+      String((purchase.product as any)?.code || "").toUpperCase().startsWith("TP-");
+
+    if (isTaste) {
+      return t.switchToSubscription;
+    }
+
+    const endsOn = purchase.period?.ends_on;
+    const today = new Date();
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const stillValid =
+      (purchase.status === "active" || purchase.status === "paid") &&
+      (!endsOn || endsOn >= todayKey);
+
+    return stillValid ? t.extendSubscription : t.renewSubscription;
+  };
+
+  /*
+   * A plan of the pet (there is no separate "purchase" page):
+   *  - waiting for payment       -> message + support
+   *  - meals / deliveries to plan -> planning screen
+   *  - otherwise                 -> delivery history of the pet
+   */
+  const openPurchase = (purchase: PurchaseSummary) => {
+    if (purchase.status === "pending") {
+      Alert.alert(t.pendingTitle, t.pendingText, [
+        { text: t.ok, style: "cancel" },
+        { text: t.contactSupport, onPress: () => router.push("/support-tickets" as any) },
+      ]);
+      return;
+    }
+
+    const canPlan =
+      !!(purchase as any).can_schedule ||
+      (purchase.is_active && (purchase.usage?.remaining_recipes ?? 0) > 0);
+
+    if (canPlan) {
+      router.push({
+        pathname: "/distribute-package",
+        params: { id: String(purchase.id) },
+      } as any);
+      return;
+    }
+
     router.push({
-      pathname: "/purchase",
-      params: { id: String(purchase.id) },
-    });
+      pathname: "/delivery-history",
+      params: { animalId: String(petId) },
+    } as any);
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | LOYALTY POINTS OF THIS PET
+  |--------------------------------------------------------------------------
+  */
+
+  const [
+    loyalty,
+    setLoyalty,
+  ] = useState<LoyaltyResponse | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!petId) {
+        return;
+      }
+
+      fetchLoyalty(isArabic ? "ar" : "en")
+        .then(setLoyalty)
+        .catch(() => undefined);
+    }, [petId, isArabic])
+  );
+
+  const petPoints =
+    loyalty?.program?.enabled
+      ? loyalty.pets.find(item => Number(item.pet.id) === petId) ?? null
+      : null;
+
+  const pointsDate = (value?: string | null) => {
+    if (!value) return "";
+    const [y, m, d] = value.split("-").map(Number);
+    return new Intl.DateTimeFormat(isArabic ? "ar" : "en", {
+      day: "numeric",
+      month: "short",
+    }).format(new Date(y, m - 1, d));
+  };
 
   /*
   |--------------------------------------------------------------------------
@@ -740,6 +890,40 @@ export default function PetFormScreen() {
     loadFormData();
 
   }, [existingPet]);
+
+  /*
+   * The screen stays mounted inside the tabs: when it is opened again
+   * in "Add pet" mode (no id) the form is emptied and shown again.
+   * Without this, a previous closed state left a blank page.
+   */
+  const resetForm = () => {
+    setSpecies("Cat");
+    setBreedSize("");
+    setName("");
+    setBreed("");
+    setAgeYears("");
+    setWeight("");
+    setSex("");
+    setAllergies("");
+    setPreferences("");
+    setHealthNotes("");
+    setLocalPhotoUri(null);
+    setRemoveExistingPhoto(false);
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isEditing) {
+        resetForm();
+        setEditVisible(true);
+      } else {
+        // Edit mode: profile page first (the modal opens with "Edit Profile")
+        setEditVisible(false);
+        loadFormData();
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isEditing, petId])
+  );
 
   /*
   |--------------------------------------------------------------------------
@@ -1630,6 +1814,102 @@ export default function PetFormScreen() {
 
         {/*
         |--------------------------------------------------------------------------
+        | LOYALTY POINTS
+        |--------------------------------------------------------------------------
+        */}
+
+        {!!petPoints && (petPoints.balance > 0 || petPoints.lifetime_earned > 0) && (
+          <View
+            style={[
+              styles.pointsCard,
+              petPoints.usable_points > 0 && styles.pointsCardUsable,
+            ]}
+          >
+            <View style={[styles.pointsHeader, isArabic && styles.rowRtl]}>
+              <View
+                style={[
+                  styles.pointsLevelIcon,
+                  { backgroundColor: petPoints.level?.color ?? POINTS_GOLD },
+                ]}
+              >
+                <MaterialCommunityIcons
+                  name={levelIcon(petPoints.level?.icon) as any}
+                  size={18}
+                  color="#FFFFFF"
+                />
+              </View>
+
+              <View style={styles.flex}>
+                <Text style={[styles.pointsTitle, isArabic && styles.textRtl]}>{t.pointsTitle}</Text>
+                {!!petPoints.level && (
+                  <Text style={[styles.pointsLevel, { color: petPoints.level.color }, isArabic && styles.textRtl]}>
+                    {petPoints.level.name}
+                  </Text>
+                )}
+              </View>
+
+              <Text style={styles.pointsBalance}>
+                {petPoints.balance} <Text style={styles.pointsUnit}>{t.points}</Text>
+              </Text>
+            </View>
+
+            <Text
+              style={[
+                styles.pointsLine,
+                petPoints.usable_points > 0 && styles.pointsLineOk,
+                isArabic && styles.textRtl,
+              ]}
+            >
+              {petPoints.usable_points > 0
+                ? t.pointsUsable(
+                    petPoints.usable_points,
+                    `${petPoints.usable_discount.toFixed(3)} ${loyalty?.program.currency ?? "KWD"}`
+                  )
+                : t.pointsMissing(petPoints.missing_points)}
+            </Text>
+
+            {petPoints.balance > 0 && !!petPoints.expires_on && petPoints.days_left !== null && petPoints.days_left >= 0 && (
+              <Text
+                style={[
+                  styles.pointsLine,
+                  petPoints.days_left <= 7 && styles.pointsLineDanger,
+                  isArabic && styles.textRtl,
+                ]}
+              >
+                {t.pointsExpire(pointsDate(petPoints.expires_on), petPoints.days_left)}
+              </Text>
+            )}
+
+            {petPoints.trial_status === "pending" && !!petPoints.trial_deadline && (
+              <Text style={[styles.pointsLine, styles.pointsLineGold, isArabic && styles.textRtl]}>
+                {t.pointsTrial(pointsDate(petPoints.trial_deadline))}
+              </Text>
+            )}
+
+            <Text style={[styles.pointsLine, isArabic && styles.textRtl]}>
+              {t.pointsNext(petPoints.next_points.regular)}
+            </Text>
+
+            <View style={[styles.pointsActions, isArabic && styles.rowRtl]}>
+              <Pressable onPress={() => router.push("/loyalty" as any)} hitSlop={6}>
+                <Text style={styles.pointsMore}>{t.pointsMore}</Text>
+              </Pressable>
+
+              {petPoints.usable_points > 0 && (
+                <Pressable
+                  onPress={openPlans}
+                  style={[styles.pointsUseButton, isArabic && styles.rowRtl]}
+                >
+                  <Ionicons name="star" size={14} color="#FFFFFF" />
+                  <Text style={styles.pointsUseText}>{t.pointsUse}</Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/*
+        |--------------------------------------------------------------------------
         | LINKS
         |--------------------------------------------------------------------------
         */}
@@ -1709,8 +1989,9 @@ export default function PetFormScreen() {
 
           ) : currentPurchase ? (
 
+            <>
             <SubscriptionCard
-              purchase={currentPurchase}
+              purchase={displayPurchase(currentPurchase)}
               isArabic={isArabic}
               onOpen={() =>
                 openPurchase(currentPurchase)
@@ -1724,7 +2005,9 @@ export default function PetFormScreen() {
               onUploadReceipt={() =>
                 openPurchase(currentPurchase)
               }
-              onRenew={
+              // The renew button is shown below (label depends on the plan)
+              onRenew={undefined}
+              onTrialOffer={
                 currentPurchase.status === "pending"
                   ? undefined
                   : openPlans
@@ -1733,6 +2016,32 @@ export default function PetFormScreen() {
                 openPurchase(currentPurchase)
               }
             />
+
+            {!!renewLabelFor(currentPurchase) &&
+              !(currentPurchase as any).trial_offer?.available && (
+              <Pressable
+                style={[
+                  styles.renewButton,
+                  isArabic &&
+                    styles.rowRtl,
+                ]}
+                onPress={openPlans}
+              >
+                <MaterialCommunityIcons
+                  name={
+                    renewLabelFor(currentPurchase) === t.extendSubscription
+                      ? "calendar-plus"
+                      : "creation-outline"
+                  }
+                  size={22}
+                  color="#FFFFFF"
+                />
+                <Text style={styles.renewButtonText}>
+                  {renewLabelFor(currentPurchase)}
+                </Text>
+              </Pressable>
+            )}
+            </>
 
           ) : (
 
@@ -1862,7 +2171,7 @@ export default function PetFormScreen() {
                       ]}
                       numberOfLines={1}
                     >
-                      {purchase.product.name}
+                      {displayPurchase(purchase).product.name}
                     </Text>
 
                     <Text
@@ -3665,9 +3974,9 @@ const styles =
       backgroundColor:
         COLORS.overlay,
 
-      paddingHorizontal: 24,
+      paddingHorizontal: 16,
 
-      paddingVertical: 23,
+      paddingVertical: 16,
 
       justifyContent:
         "center",
@@ -3676,13 +3985,13 @@ const styles =
     modalCard: {
       width: "100%",
 
-      maxHeight: "94%",
+      maxHeight: "96%",
 
       maxWidth: 520,
 
       alignSelf: "center",
 
-      borderRadius: 15,
+      borderRadius: 10,
 
       overflow: "hidden",
 
@@ -3693,9 +4002,9 @@ const styles =
     modalClose: {
       position: "absolute",
 
-      top: 22,
+      top: 10,
 
-      right: 22,
+      right: 10,
 
       zIndex: 20,
 
@@ -3710,23 +4019,25 @@ const styles =
     },
 
     modalContent: {
-      paddingHorizontal: 25,
+      paddingHorizontal: 18,
 
-      paddingTop: 72,
+      paddingTop: 16,
     },
 
     modalTitle: {
       fontFamily:
         "Cairo_800ExtraBold",
 
-      fontSize: 29,
+      fontSize: 22,
 
-      lineHeight: 38,
+      lineHeight: 30,
 
       color:
         COLORS.text,
 
-      marginBottom: 22,
+      marginBottom: 12,
+
+      paddingRight: 40,
     },
 
     modalPhotoRow: {
@@ -3734,15 +4045,15 @@ const styles =
 
       alignItems: "center",
 
-      gap: 23,
+      gap: 14,
     },
 
     modalAvatar: {
-      width: 105,
+      width: 76,
 
-      height: 115,
+      height: 82,
 
-      borderRadius: 53,
+      borderRadius: 38,
 
       borderBottomLeftRadius: 10,
 
@@ -3766,7 +4077,7 @@ const styles =
     },
 
     changePhotoButton: {
-      minHeight: 53,
+      minHeight: 44,
 
       paddingHorizontal: 15,
 
@@ -3775,7 +4086,7 @@ const styles =
       borderColor:
         "#B7DAD4",
 
-      borderRadius: 9,
+      borderRadius: 8,
 
       backgroundColor:
         "#E8EFEC",
@@ -3820,15 +4131,15 @@ const styles =
       backgroundColor:
         COLORS.border,
 
-      marginTop: 25,
+      marginTop: 14,
 
-      marginBottom: 14,
+      marginBottom: 2,
     },
 
     formLabel: {
-      marginTop: 14,
+      marginTop: 10,
 
-      marginBottom: 8,
+      marginBottom: 5,
 
       fontFamily:
         "Cairo_500Medium",
@@ -3842,18 +4153,18 @@ const styles =
     modalInput: {
       width: "100%",
 
-      minHeight: 62,
+      minHeight: 48,
 
-      paddingHorizontal: 17,
+      paddingHorizontal: 14,
 
-      paddingVertical: 12,
+      paddingVertical: 8,
 
       borderWidth: 1,
 
       borderColor:
         COLORS.border,
 
-      borderRadius: 8,
+      borderRadius: 7,
 
       backgroundColor:
         COLORS.inputBackground,
@@ -3861,16 +4172,16 @@ const styles =
       fontFamily:
         "Cairo_400Regular",
 
-      fontSize: 16,
+      fontSize: 15,
 
       color:
         COLORS.text,
     },
 
     modalTextarea: {
-      minHeight: 140,
+      minHeight: 90,
 
-      paddingTop: 17,
+      paddingTop: 10,
     },
 
     inputRtl: {
@@ -3891,16 +4202,16 @@ const styles =
     },
 
     modalSelect: {
-      minHeight: 62,
+      minHeight: 48,
 
-      paddingHorizontal: 17,
+      paddingHorizontal: 14,
 
       borderWidth: 1,
 
       borderColor:
         COLORS.border,
 
-      borderRadius: 8,
+      borderRadius: 7,
 
       backgroundColor:
         COLORS.inputBackground,
@@ -3921,18 +4232,18 @@ const styles =
       fontFamily:
         "Cairo_400Regular",
 
-      fontSize: 16,
+      fontSize: 15,
 
       color:
         COLORS.text,
     },
 
     saveButton: {
-      minHeight: 59,
+      minHeight: 50,
 
-      marginTop: 39,
+      marginTop: 20,
 
-      borderRadius: 9,
+      borderRadius: 8,
 
       backgroundColor:
         COLORS.dark,
@@ -4051,6 +4362,113 @@ const styles =
     | RTL
     |--------------------------------------------------------------------------
     */
+
+    /*
+    |--------------------------------------------------------------------------
+    | LOYALTY POINTS
+    |--------------------------------------------------------------------------
+    */
+
+    pointsCard: {
+      marginTop: 24,
+      padding: 14,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: "#E8C66A",
+      backgroundColor: "#FFF8E5",
+    },
+
+    pointsCardUsable: {
+      borderColor: "#86C9A0",
+      backgroundColor: "#F1FAF4",
+    },
+
+    pointsHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      marginBottom: 6,
+    },
+
+    pointsLevelIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+
+    pointsTitle: {
+      fontFamily: "Cairo_700Bold",
+      fontSize: 15,
+      color: COLORS.text,
+    },
+
+    pointsLevel: {
+      fontFamily: "Cairo_600SemiBold",
+      fontSize: 12.5,
+    },
+
+    pointsBalance: {
+      fontFamily: "Cairo_800ExtraBold",
+      fontSize: 24,
+      color: COLORS.text,
+    },
+
+    pointsUnit: {
+      fontFamily: "Cairo_600SemiBold",
+      fontSize: 13,
+      color: COLORS.muted,
+    },
+
+    pointsLine: {
+      marginTop: 2,
+      fontFamily: "Cairo_500Medium",
+      fontSize: 13,
+      lineHeight: 20,
+      color: COLORS.muted,
+    },
+
+    pointsLineOk: {
+      color: "#15803D",
+    },
+
+    pointsLineDanger: {
+      color: "#B42318",
+    },
+
+    pointsLineGold: {
+      color: "#9A6B00",
+    },
+
+    pointsActions: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginTop: 10,
+    },
+
+    pointsMore: {
+      fontFamily: "Cairo_700Bold",
+      fontSize: 13,
+      color: COLORS.primary,
+    },
+
+    pointsUseButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      minHeight: 36,
+      paddingHorizontal: 14,
+      borderRadius: 9,
+      backgroundColor: POINTS_GOLD,
+    },
+
+    pointsUseText: {
+      fontFamily: "Cairo_700Bold",
+      fontSize: 13,
+      color: "#FFFFFF",
+    },
 
     rowRtl: {
       flexDirection:

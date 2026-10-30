@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
+  Alert,
   Animated,
   KeyboardAvoidingView,
   Modal,
@@ -7,6 +9,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -27,13 +30,17 @@ import {
   type Province,
   type SavedAddress,
 } from "../../services/shopApi";
-import type { BreedSize, CheckoutPayload, LifeStage, ShopCatalogResponse, ShopProduct } from "../../types/shop";
+import type { BreedSize, CheckoutItem, CheckoutPayload, CheckoutResult, LifeStage, ShopCatalogResponse, ShopProduct } from "../../types/shop";
 
 import { BackRow, CenteredLoader, ErrorState, PrimaryButton, SecondaryButton } from "../../components/purchase/ScreenParts";
 import { FONTS, PCOLORS, slotLabel } from "../../components/purchase/purchaseUtils";
 import { formatPrice } from "../../components/purchase/SubscriptionCard";
-import { PriceTag, ProductImage, SpeciesIcon } from "../../components/shop/shopUi";
+import { ConsultationNote, ProductImage, SpeciesIcon } from "../../components/shop/shopUi";
 import CardPaymentSheet from "../../components/shop/CardPaymentSheet";
+import { findGroup, groupProducts } from "../../components/shop/productGroups";
+import QuickDeliverySheet from "../../components/shop/QuickDeliverySheet";
+import { createPet } from "../../services/customerApi";
+import { addToOrderCart, clearOrderCart, getOrderCart, removeFromOrderCart, saveOrderCart, type OrderCartItem } from "../../services/orderCart";
 
 /*
 |--------------------------------------------------------------------------
@@ -41,8 +48,11 @@ import CardPaymentSheet from "../../components/shop/CardPaymentSheet";
 |--------------------------------------------------------------------------
 |
 | One screen, as few fields as possible:
-|   1. Pet     : an existing compatible pet, or a new one (age + size for dogs,
-|                name optional -> "My Cat" / "My Dog")
+|   1. Pets    : one or several pets in the same order. Existing pets are
+|                ticked, new ones added (age, size for dogs, name optional).
+|                Each pet gets the age version of the pack that suits it and
+|                1-3 packs (the next ones follow). 2 pets or more: discount
+|                on every pack (multi_pet_discount of the catalog).
 |   2. Address : only the first time (governorate, area, address, slot),
 |                otherwise choice between the saved addresses
 |   3. Payment : card only (KNET or Visa / Mastercard).
@@ -53,27 +63,83 @@ import CardPaymentSheet from "../../components/shop/CardPaymentSheet";
 |
 */
 
-type PetChoice = number | "new";
+/** One pet of the order: existing (animalId) or new (age, size, name) + packs */
+type Line = {
+  key: string;
+  animalId: number | null;
+  /** New pet only: Cat / Dog (another species = another plan) */
+  species?: "Cat" | "Dog";
+  age: LifeStage | null;
+  size: BreedSize | null;
+  name: string;
+  quantity: number;
+};
+
+/*
+ * Pack name from the product code (not the product name of Laravel):
+ *   REG- Subscription pack · 30 meals / TP- Taste pack / PREMIUM- Premium subscription
+ */
+function packLabel(
+  code: string | null | undefined,
+  totalRecipes: number | null | undefined,
+  isArabic: boolean,
+  fallbackName = ""
+): string {
+  const value = String(code || "").trim().toUpperCase();
+
+  const kind = value.startsWith("PREMIUM-")
+    ? isArabic
+      ? "اشتراك بريميوم"
+      : "Premium subscription"
+    : value.startsWith("REG-")
+      ? isArabic
+        ? "باقة اشتراك"
+        : "Subscription pack"
+      : value.startsWith("TP-")
+        ? isArabic
+          ? "باقة التذوق"
+          : "Taste pack"
+        : null;
+
+  if (!kind) {
+    return fallbackName;
+  }
+
+  return totalRecipes ? `${kind} · ${totalRecipes} ${isArabic ? "وجبة" : "meals"}` : kind;
+}
+
+/** Loyalty points color */
+const GOLD = "#D4A017";
+
+let lineCounter = 0;
+const newKey = () => `line-${Date.now()}-${lineCounter++}`;
 
 const SIZES: BreedSize[] = ["Small", "Medium", "Large"];
+
+/** Ages of a new pet of the other species (another plan). */
+const SPECIES_AGES: Record<"Cat" | "Dog", string[]> = { Cat: ["Kitten", "Adult", "Senior"], Dog: ["Puppy", "Adult", "Senior"] };
 
 export default function CheckoutScreen() {
   const { isArabic } = useAppLanguage();
   const lang = isArabic ? "ar" : "en";
   const { signedIn, ready } = useSession();
-  const params = useLocalSearchParams<{ productId?: string }>();
+  // animalId: pet chosen on the plans page (selected first, the other pets can be added)
+  const params = useLocalSearchParams<{ productId?: string; animalId?: string; quantity?: string }>();
   const productId = Number(params.productId);
+  const preselectedPetId = params.animalId ? Number(params.animalId) : null;
+  const preselectedQuantity = Math.max(1, Number(params.quantity) || 1);
+
+  // The screen stays mounted: new product / pet in the params = new lines
+  const paramsKey = `${productId}-${preselectedPetId ?? ""}`;
+  const linesKeyRef = useRef("");
   const isFocused = useIsFocused();
 
   const [catalog, setCatalog] = useState<ShopCatalogResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Pet
-  const [petChoice, setPetChoice] = useState<PetChoice>("new");
-  const [petAge, setPetAge] = useState<LifeStage | null>(null);
-  const [petSize, setPetSize] = useState<BreedSize | null>(null);
-  const [petName, setPetName] = useState("");
+  // Pets of the order (one line per pet)
+  const [lines, setLines] = useState<Line[]>([]);
 
   // Address
   const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([]);
@@ -90,11 +156,32 @@ export default function CheckoutScreen() {
   // Payment
   const [paymentMethod, setPaymentMethod] = useState<CheckoutPayload["payment_method"] | null>("knet");
   const [note, setNote] = useState("");
+  const [noteOpen, setNoteOpen] = useState(false);
 
   // Card sheet + confirmation after payment
   const [paySheetVisible, setPaySheetVisible] = useState(false);
-  const [paidOrder, setPaidOrder] = useState<{ purchaseId: number; paid: boolean; petName: string; last4: string } | null>(null);
+  const [paidOrder, setPaidOrder] = useState<{
+    paid: boolean;
+    last4: string;
+    purchases: NonNullable<CheckoutResult["purchases"]>;
+    /** Pack name of each pet (from the product code) */
+    labels?: Record<number, string>;
+    total: number;
+    discount: number;
+    /** Loyalty points used / earned on the order */
+    pointsUsed: number;
+    pointsDiscount: number;
+    pointsEarned: number;
+    currency: string;
+  } | null>(null);
+
+  // Loyalty points: used by default, the customer can switch them off (per pet)
+  const [pointsOff, setPointsOff] = useState<Record<number, boolean>>({});
   const confirmScale = useRef(new Animated.Value(0)).current;
+
+  // Taste pack (1 delivery): the day is chosen right after the payment
+  const [quickPlan, setQuickPlan] = useState<{ id: number; petName: string } | null>(null);
+  const [plannedIds, setPlannedIds] = useState<number[]>([]);
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -106,7 +193,43 @@ export default function CheckoutScreen() {
         retry: "إعادة المحاولة",
         notFound: "هذا المنتج غير متوفر.",
         petTitle: "لأي حيوان؟",
+        yourOrder: "طلبك",
+        addOtherPet: "إضافة حيوان آخر",
+        packsQuestionTitle: "باقة إضافية",
+        packsQuestionText: (name: string) => `هل هذه الباقة الإضافية لـ ${name} (تبدأ بعد انتهاء الأولى) أم لحيوان آخر؟`,
+        packsSamePet: (name: string) => `لـ ${name}`,
+        packsOtherPet: "لحيوان آخر",
+        cancelLabel: "إلغاء",
+        packsInRow: (n: number, name: string) => `${n} باقات لـ ${name}، واحدة بعد الأخرى.`,
+        cat: "قط",
+        dog: "كلب",
+        ageLabels: { Kitten: "صغير", Puppy: "جرو", Adult: "بالغ", Senior: "كبير السن" } as Record<string, string>,
+        packForCats: "هذه الباقة مخصصة للقطط. اختر باقة مناسبة لكلبك، وسنحتفظ بطلبك.",
+        packForDogs: "هذه الباقة مخصصة للكلاب. اختر باقة مناسبة لقطتك، وسنحتفظ بطلبك.",
+        chooseSuitablePlan: "اختيار باقة مناسبة",
+        errOtherSpecies: "اختر باقة مناسبة لحيوانك الجديد أو احذفه من الطلب.",
+        addPetsTitle: (pack: string) => `إضافة حيوان إلى ${pack}`,
+        alsoInOrder: "أيضاً في طلبك",
+        addNote: "إضافة ملاحظة للطلب",
+        continuePets: "اختيار باقة لحيواناتي الأخرى",
+        continuePetsHint: "نحتفظ بهذا الطلب، اختر باقة أخرى ثم ادفع للجميع مرة واحدة.",
+        otherPetsTitle: (n: number) => (n === 1 ? "يمكن لحيوانك الآخر الحصول على هذه الباقة" : `يمكن لـ ${n} من حيواناتك الحصول على هذه الباقة`),
+        otherPetsText: "أضفهم إلى هذا الطلب: دفعة واحدة للجميع.",
+        addAllPets: (n: number) => `إضافة الكل (${n})`,
         newPet: "حيوان جديد",
+        newPetN: "حيوان جديد",
+        addPet: "إضافة حيوان آخر",
+        remove: "حذف",
+        packs: "عدد الباقات",
+        packsHint: "الباقة التالية تبدأ بعد انتهاء السابقة",
+        discountOffer: (p: string) => `أضف حيواناً آخر ووفّر ${p}٪ على كل باقة`,
+        discountApplied: (p: string) => `خصم الحيوانات المتعددة: -${p}٪ على كل باقة`,
+        subtotal: "المجموع الفرعي",
+        discount: "الخصم",
+        errNoPet: "يرجى اختيار حيوان واحد على الأقل.",
+        planFor: "تنظيم توصيل",
+        chooseDay: "اختيار يوم التوصيل",
+        dayChosen: "تم تحديد اليوم",
         age: "العمر",
         size: "حجم الكلب",
         petName: "الاسم (اختياري)",
@@ -125,6 +248,11 @@ export default function CheckoutScreen() {
         paymentTitle: "طريقة الدفع",
         orderNote: "ملاحظة على الطلب (اختياري)",
         total: "المجموع",
+        usePoints: (n: number) => `استخدام ${n} نقطة`,
+        pointsSave: (amount: string) => `وفّر ${amount}`,
+        pointsMissing: (balance: number, missing: number) => `${balance} نقطة · ${missing} نقطة أخرى لاستخدامها`,
+        pointsLine: "نقاط الولاء",
+        pointsEarned: (n: number) => `+${n} نقطة ولاء`,
         confirm: "الدفع",
         knetHint: "بطاقة السحب الكويتية",
         cardHint: "بطاقة ائتمان",
@@ -150,7 +278,43 @@ export default function CheckoutScreen() {
         retry: "Try again",
         notFound: "This product is not available.",
         petTitle: "For which pet?",
+        yourOrder: "Your order",
+        addOtherPet: "Add another pet",
+        packsQuestionTitle: "One more pack",
+        packsQuestionText: (name: string) => `Is this extra pack for ${name} (it starts when the first one ends) or for another pet?`,
+        packsSamePet: (name: string) => `For ${name}`,
+        packsOtherPet: "For another pet",
+        cancelLabel: "Cancel",
+        packsInRow: (n: number, name: string) => `${n} packs for ${name}, one after the other.`,
+        cat: "Cat",
+        dog: "Dog",
+        ageLabels: { Kitten: "Kitten", Puppy: "Puppy", Adult: "Adult", Senior: "Senior" } as Record<string, string>,
+        packForCats: "This pack is for cats. Choose a plan suited to your dog, we keep your order.",
+        packForDogs: "This pack is for dogs. Choose a plan suited to your cat, we keep your order.",
+        chooseSuitablePlan: "Choose a suitable plan",
+        errOtherSpecies: "Choose a suitable plan for your new pet, or remove it from the order.",
+        addPetsTitle: (pack: string) => `Add a pet to ${pack}`,
+        alsoInOrder: "Also in your order",
+        addNote: "Add a note to the order",
+        continuePets: "Choose a plan for my other pets",
+        continuePetsHint: "We keep this order: pick another plan, then pay for everyone at once.",
+        otherPetsTitle: (n: number) => (n === 1 ? "Your other pet can get this pack too" : `Your ${n} other pets can get this pack too`),
+        otherPetsText: "Add them to this order: one payment for all.",
+        addAllPets: (n: number) => `Add all (${n})`,
         newPet: "New pet",
+        newPetN: "New pet",
+        addPet: "Add another pet",
+        remove: "Remove",
+        packs: "Packs",
+        packsHint: "The next pack starts when the previous one ends",
+        discountOffer: (p: string) => `Add another pet and save ${p}% on every pack`,
+        discountApplied: (p: string) => `Multi-pet discount: -${p}% on every pack`,
+        subtotal: "Subtotal",
+        discount: "Discount",
+        errNoPet: "Please choose at least one pet.",
+        planFor: "Plan deliveries",
+        chooseDay: "Choose the delivery day",
+        dayChosen: "Day chosen",
         age: "Age",
         size: "Dog size",
         petName: "Name (optional)",
@@ -169,6 +333,11 @@ export default function CheckoutScreen() {
         paymentTitle: "Payment method",
         orderNote: "Order note (optional)",
         total: "Total",
+        usePoints: (n: number) => `Use ${n} points`,
+        pointsSave: (amount: string) => `Save ${amount}`,
+        pointsMissing: (balance: number, missing: number) => `${balance} pts · ${missing} more to use them`,
+        pointsLine: "Loyalty points",
+        pointsEarned: (n: number) => `+${n} loyalty points`,
         confirm: "Pay now",
         knetHint: "Kuwaiti debit card",
         cardHint: "Credit card",
@@ -199,20 +368,33 @@ export default function CheckoutScreen() {
     try {
       setError("");
 
-      const data = await fetchShopProducts(lang);
+      const data = await fetchShopProducts(lang, null, productId || null);
       setCatalog(data);
 
       const product = data.products.find(item => item.id === productId);
 
       if (product) {
-        // Pet: the first compatible pet, otherwise a new one
-        const compatible = data.pets.filter(pet => product.compatible_pet_ids.includes(pet.id));
-        setPetChoice(current =>
-          current !== "new" && compatible.some(pet => pet.id === current) ? current : compatible[0]?.id ?? "new"
-        );
+        // First time: the first compatible pet, otherwise one new pet of the chosen age
+        setLines(current => {
+          if (current.length > 0 && linesKeyRef.current === paramsKey) return current;
+          linesKeyRef.current = paramsKey;
 
-        if (product.age_options.length === 1) setPetAge(product.age_options[0].value);
-        if (product.breed_size_category) setPetSize(product.breed_size_category);
+          // Pet chosen on the plans page first, otherwise the first compatible one
+          const compatible =
+            data.pets.find(pet => pet.id === preselectedPetId) ??
+            data.pets.find(pet => product.compatible_pet_ids.includes(pet.id));
+
+          return [
+            {
+              key: newKey(),
+              animalId: compatible?.id ?? null,
+              age: product.life_stages.length === 1 ? product.life_stages[0] : product.age_options.length === 1 ? product.age_options[0].value : null,
+              size: product.breed_size_category ?? null,
+              name: "",
+              quantity: compatible?.id === preselectedPetId ? preselectedQuantity : 1,
+            },
+          ];
+        });
       }
 
       // Card payment only: KNET by default
@@ -237,12 +419,26 @@ export default function CheckoutScreen() {
     } finally {
       setLoading(false);
     }
-  }, [lang, productId]);
+  }, [lang, productId, preselectedPetId, paramsKey, preselectedQuantity]);
 
   useFocusEffect(
     useCallback(() => {
       if (ready && signedIn) void load();
     }, [load, ready, signedIn])
+  );
+
+  /*
+  |--------------------------------------------------------------------------
+  | ORDER IN PROGRESS: packs already chosen for the other pets
+  |--------------------------------------------------------------------------
+  */
+
+  const [cart, setCart] = useState<OrderCartItem[]>([]);
+
+  useFocusEffect(
+    useCallback(() => {
+      getOrderCart().then(setCart).catch(() => setCart([]));
+    }, [])
   );
 
   // Not signed in (or session lost): sign in, then back here
@@ -257,10 +453,410 @@ export default function CheckoutScreen() {
     [catalog, productId]
   );
 
-  const compatiblePets = useMemo(
-    () => (catalog?.pets ?? []).filter(pet => product?.compatible_pet_ids.includes(pet.id)),
-    [catalog, product]
+  // Same pack in the other ages (REG-CAT-KITTEN / ADULT / SENIOR)
+  const group = useMemo(
+    () =>
+      catalog && product
+        ? findGroup(groupProducts(catalog.products.filter(item => item.species === product.species), isArabic), product.id)
+        : null,
+    [catalog, product, isArabic]
   );
+
+  const variants: ShopProduct[] = useMemo(
+    () => (group && group.products.length > 1 ? group.products : product ? [product] : []),
+    [group, product]
+  );
+
+  // Ages a new pet can have (one per version of the pack)
+  const ageChoices = useMemo(() => {
+    const map = new Map<string, string>();
+    variants.forEach(item =>
+      item.age_options
+        .filter(option => variants.length === 1 || item.life_stages.includes(option.value))
+        .forEach(option => map.set(option.value, option.label))
+    );
+    return Array.from(map.entries()).map(([value, label]) => ({ value, label }));
+  }, [variants]);
+
+  // Existing pets that can receive one version of the pack
+  const compatiblePets = useMemo(
+    () => (catalog?.pets ?? []).filter(pet => variants.some(item => item.compatible_pet_ids.includes(pet.id))),
+    [catalog, variants]
+  );
+
+  // Packs chosen for the other pets (the pets of this screen win)
+  const cartOthers = useMemo(
+    () => cart.filter(item => !lines.some(line => line.animalId === item.animalId)),
+    [cart, lines]
+  );
+
+  // Pets of this pack not already in the order with another plan
+  const selectablePets = useMemo(
+    () => compatiblePets.filter(pet => !cartOthers.some(item => item.animalId === pet.id)),
+    [compatiblePets, cartOthers]
+  );
+
+  /** Version of the pack for a line (age of the pet). */
+  const productFor = (line: Line): ShopProduct | null => {
+    if (!product) return null;
+    if (line.animalId) {
+      return (
+        (product.compatible_pet_ids.includes(line.animalId) ? product : null) ??
+        variants.find(item => item.compatible_pet_ids.includes(line.animalId as number)) ??
+        product
+      );
+    }
+    return (line.age && variants.find(item => item.life_stages.includes(line.age as LifeStage))) || product;
+  };
+
+  /** New pet line ready (age / size known): a card, not a form. */
+  const newPetReady = (line: Line) =>
+    !line.animalId &&
+    (!line.species || line.species === product?.species) &&
+    !!line.age &&
+    !(product?.species === "Dog" && !productFor(line)?.breed_size_category && !line.size);
+
+  const maxPets = catalog?.max_pets ?? 6;
+  const maxPacks = catalog?.max_packs_per_pet ?? 3;
+  const discountRule = catalog?.multi_pet_discount;
+  const discountPercent = discountRule?.percent ?? 0;
+  // Pets of the whole order (this screen + the other plans chosen)
+  const packLines = lines.filter(line => !line.species || line.species === product?.species);
+  const orderPetsCount = packLines.length + cartOthers.length;
+  const freeSlots = Math.max(0, maxPets - cartOthers.length);
+  const discountActive = discountPercent > 0 && orderPetsCount >= (discountRule?.min_pets ?? 2);
+  const percentLabel = String(Math.round(discountPercent));
+
+  // Prices of the order (the server computes the same)
+  const pricing = useMemo(() => {
+    let subtotal = 0;
+    let discount = 0;
+
+    packLines.forEach(line => {
+      const item = productFor(line);
+      if (!item) return;
+      const amount = item.current_price * line.quantity;
+      subtotal += amount;
+      if (discountActive && (!item.is_trial || discountRule?.applies_to_trial)) {
+        discount += Math.round(item.current_price * discountPercent * 10) / 1000 * line.quantity;
+      }
+    });
+
+    // Other plans of the order (fresh price of the catalog when known)
+    cartOthers.forEach(item => {
+      const fresh = catalog?.products.find(other => other.id === item.productId);
+      const price = fresh?.current_price ?? item.price;
+      const isTrial = fresh?.is_trial ?? item.isTrial;
+      subtotal += price * item.quantity;
+      if (discountActive && (!isTrial || discountRule?.applies_to_trial)) {
+        discount += Math.round(price * discountPercent * 10) / 1000 * item.quantity;
+      }
+    });
+
+    return { subtotal, discount, total: Math.max(0, subtotal - discount) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines, variants, discountActive, discountPercent, cartOthers, catalog]);
+
+  /*
+   * LOYALTY POINTS of a pet on its first pack (same rules as the server:
+   * min / max points, never more than the price after the other discounts).
+   */
+  const program = catalog?.loyalty_program ?? null;
+
+  const petPoints = (animalId: number | null | undefined, packPrice: number, isTrialPack: boolean) => {
+    if (!animalId || animalId < 0 || !program?.enabled) return null;
+
+    const info = catalog?.pets.find(pet => pet.id === animalId)?.loyalty;
+    if (!info) return null;
+
+    const multi = discountActive && (!isTrialPack || discountRule?.applies_to_trial)
+      ? Math.round(packPrice * discountPercent * 10) / 1000
+      : 0;
+    const priceAfter = Math.max(0, packPrice - multi);
+
+    let usable = info.usable_points;
+    if (usable > 0 && program.point_value > 0) {
+      usable = Math.min(usable, Math.floor(priceAfter / program.point_value + 1e-6));
+    }
+    if (usable < program.min_points) usable = 0;
+
+    const on = usable > 0 && !pointsOff[animalId];
+
+    return {
+      info,
+      usable,
+      discount: Math.round(usable * program.point_value * 1000) / 1000,
+      on,
+    };
+  };
+
+  const updateLine = (key: string, changes: Partial<Line>) =>
+    setLines(current => current.map(line => (line.key === key ? { ...line, ...changes } : line)));
+
+  const togglePet = (petId: number) =>
+    setLines(current =>
+      current.some(line => line.animalId === petId)
+        ? current.filter(line => line.animalId !== petId)
+        : current.length >= freeSlots
+          ? current
+          : [...current, { key: newKey(), animalId: petId, age: null, size: null, name: "", quantity: 1 }]
+    );
+
+  // Existing pets not in the order yet (one tap: all of them)
+  const otherPets = selectablePets.filter(pet => !lines.some(line => line.animalId === pet.id));
+
+  const addAllPets = () =>
+    setLines(current => {
+      const next = [...current];
+      selectablePets.forEach(pet => {
+        if (next.length < freeSlots && !next.some(line => line.animalId === pet.id)) {
+          next.push({ key: newKey(), animalId: pet.id, age: null, size: null, name: "", quantity: 1 });
+        }
+      });
+      return next;
+    });
+
+  /*
+   * "Choose a plan for my other pets": the pets of this screen are kept
+   * in the order, then the plans page of the next pet without a plan.
+   */
+  const petsWithoutPlan = (catalog?.pets ?? []).filter(
+    pet => !lines.some(line => line.animalId === pet.id) && !cartOthers.some(item => item.animalId === pet.id)
+  );
+
+  const continueWithOtherPets = async () => {
+    const kept: OrderCartItem[] = lines
+      .filter(line => !!line.animalId)
+      .map(line => {
+        const item = productFor(line) as ShopProduct;
+        const pet = catalog?.pets.find(other => other.id === line.animalId);
+
+        return {
+          productId: item.id,
+          animalId: line.animalId as number,
+          quantity: line.quantity,
+          productName: item.name,
+          code: item.code,
+          totalRecipes: item.total_recipes,
+          petName: pet?.name ?? "",
+          species: item.species,
+          price: item.current_price,
+          currency: item.currency,
+          isTrial: !!item.is_trial,
+          addedAt: Date.now(),
+        };
+      });
+
+    const next = await addToOrderCart(kept);
+    setCart(next);
+
+    const nextPet = petsWithoutPlan[0];
+    router.push({ pathname: "/plans", params: nextPet ? { animalId: String(nextPet.id) } : {} } as any);
+  };
+
+  const removeCartItem = async (animalId: number) => {
+    setCart(await removeFromOrderCart(animalId));
+  };
+
+  const updateCartQuantity = async (animalId: number, quantity: number) => {
+    const next = cart.map(item => (item.animalId === animalId ? { ...item, quantity } : item));
+    setCart(next);
+    await saveOrderCart(next);
+  };
+
+  /*
+   * Whole order, one card per pet: the plans chosen before (in the order
+   * they were added), then the pets of this pack.
+   */
+  const orderCards = [
+    ...cartOthers.map(item => {
+      const fresh = catalog?.products.find(other => other.id === item.productId) ?? null;
+
+      return {
+        key: `cart-${item.animalId}`,
+        animalId: item.animalId,
+        isTrial: fresh?.is_trial ?? item.isTrial,
+        product: fresh,
+        species: item.species,
+        petName: item.petName,
+        productName: packLabel(fresh?.code ?? item.code, fresh?.total_recipes ?? item.totalRecipes, isArabic, fresh?.name ?? item.productName),
+        price: fresh?.current_price ?? item.price,
+        currency: fresh?.currency ?? item.currency,
+        quantity: item.quantity,
+        onQuantity: (quantity: number) =>
+          askPacks(`cart-${item.animalId}`, item.petName, item.quantity, quantity, n => void updateCartQuantity(item.animalId, n)),
+        onRemove: () => void removeCartItem(item.animalId),
+      };
+    }),
+    ...lines
+      .filter(line => !!line.animalId)
+      .map(line => {
+        const item = productFor(line);
+        const pet = catalog?.pets.find(other => other.id === line.animalId);
+
+        return {
+          key: line.key,
+          animalId: line.animalId as number,
+          isTrial: !!item?.is_trial,
+          product: item,
+          species: item?.species ?? "",
+          petName: pet?.name ?? "",
+          productName: packLabel(item?.code, item?.total_recipes, isArabic, item?.name ?? ""),
+          price: item?.current_price ?? 0,
+          currency: item?.currency ?? "",
+          quantity: line.quantity,
+          onQuantity: (quantity: number) =>
+            askPacks(line.key, pet?.name ?? "", line.quantity, quantity, n => updateLine(line.key, { quantity: n })),
+          onRemove: () => removeLine(line.key),
+          onEdit: undefined as undefined | (() => void),
+        };
+      }),
+    // New pets (account just created): shown like the others, "My Cat"
+    ...lines
+      .filter(line => newPetReady(line))
+      .map((line, index) => {
+        const item = productFor(line);
+        const defaultName =
+          (product?.species === "Dog" ? t.petNamePlaceholderDog : t.petNamePlaceholderCat) + (index > 0 ? ` ${index + 1}` : "");
+
+        return {
+          key: line.key,
+          animalId: null as number | null,
+          isTrial: !!item?.is_trial,
+          product: item,
+          species: item?.species ?? "",
+          petName: line.name.trim() || defaultName,
+          productName: packLabel(item?.code, item?.total_recipes, isArabic, item?.name ?? ""),
+          price: item?.current_price ?? 0,
+          currency: item?.currency ?? "",
+          quantity: line.quantity,
+          onQuantity: (quantity: number) =>
+            askPacks(line.key, line.name.trim() || defaultName, line.quantity, quantity, n => updateLine(line.key, { quantity: n })),
+          onRemove: () => removeLine(line.key),
+          onEdit: () => setEditNew(current => ({ ...current, [line.key]: !current[line.key] })),
+        };
+      }),
+  ];
+
+  // Points of each card + total of the order after the points
+  const cardPoints = (card: (typeof orderCards)[number]) => petPoints(card.animalId, card.price, card.isTrial);
+  const pointsDiscount = Math.round(
+    orderCards.reduce((sum, card) => {
+      const points = cardPoints(card);
+      return sum + (points?.on ? points.discount : 0);
+    }, 0) * 1000
+  ) / 1000;
+  const grandTotal = Math.max(0, Math.round((pricing.total - pointsDiscount) * 1000) / 1000);
+
+  /**
+   * Packs of a pet: going from 1 to 2 the customer says if they are for the
+   * same pet (one after the other) or for another pet (a pet is added).
+   */
+  const askPacks = (key: string, petName: string, current: number, next: number, apply: (n: number) => void) => {
+    if (!(current === 1 && next === 2) || packsAsked[key]) {
+      apply(next);
+      return;
+    }
+
+    setPacksAsked(asked => ({ ...asked, [key]: true }));
+
+    Alert.alert(t.packsQuestionTitle, t.packsQuestionText(petName), [
+      { text: t.packsSamePet(petName), onPress: () => apply(next) },
+      { text: t.packsOtherPet, onPress: () => router.push("/add-pet-plan" as any) },
+      { text: t.cancelLabel, style: "cancel" },
+    ]);
+  };
+
+  const addNewPet = () =>
+    setLines(current =>
+      current.length >= freeSlots
+        ? current
+        : [
+            ...current,
+            {
+              key: newKey(),
+              animalId: null,
+              age: (product?.life_stages.length === 1 ? product.life_stages[0] : null) ?? null,
+              size: product?.breed_size_category ?? null,
+              name: "",
+              quantity: 1,
+            },
+          ]
+    );
+
+  const removeLine = (key: string) => setLines(current => current.filter(line => line.key !== key));
+
+  const [creatingPet, setCreatingPet] = useState(false);
+
+  // New pet shown as a card ("My Cat"); its small form opens on "edit"
+  const [editNew, setEditNew] = useState<Record<string, boolean>>({});
+
+  // 1 -> 2 packs: asked once per pet (same pet one after the other, or another pet?)
+  const [packsAsked, setPacksAsked] = useState<Record<string, boolean>>({});
+
+
+  const choosePlanForNewPet = async (line: Line) => {
+    if (creatingPet || !line.species) return;
+
+    if (!line.age) {
+      Alert.alert("", t.errPet);
+      return;
+    }
+
+    if (line.species === "Dog" && !line.size) {
+      Alert.alert("", t.errSize);
+      return;
+    }
+
+    try {
+      setCreatingPet(true);
+
+      const name = line.name.trim() || (line.species === "Dog" ? t.petNamePlaceholderDog : t.petNamePlaceholderCat);
+      const created: any = await createPet({
+        name,
+        species: line.species,
+        breed_size_category: line.species === "Dog" ? line.size : null,
+        age: line.age,
+      } as any);
+
+      // The pets of this pack stay in the order
+      const kept: OrderCartItem[] = packLines
+        .filter(other => !!other.animalId)
+        .map(other => {
+          const item = productFor(other) as ShopProduct;
+          const pet = catalog?.pets.find(p => p.id === other.animalId);
+
+          return {
+            productId: item.id,
+            animalId: other.animalId as number,
+            quantity: other.quantity,
+            productName: item.name,
+            code: item.code,
+            totalRecipes: item.total_recipes,
+            petName: pet?.name ?? "",
+            species: item.species,
+            price: item.current_price,
+            currency: item.currency,
+            isTrial: !!item.is_trial,
+            addedAt: Date.now(),
+          };
+        });
+
+      setCart(await addToOrderCart(kept));
+      removeLine(line.key);
+
+      const newId = created?.animal?.id ?? created?.pet?.id ?? created?.data?.id ?? created?.id ?? null;
+
+      router.push({
+        pathname: "/plans",
+        params: newId ? { animalId: String(newId) } : { newPetName: name },
+      } as any);
+    } catch (e: any) {
+      Alert.alert("", e?.message || "Error");
+    } finally {
+      setCreatingPet(false);
+    }
+  };
 
   const province = provinces.find(item => item.id === provinceId) ?? null;
   const zone = province?.zones.find(item => item.id === zoneId) ?? null;
@@ -288,12 +884,11 @@ export default function CheckoutScreen() {
   const validate = (): string | null => {
     if (!product || !catalog) return "Error";
 
-    const isNewPet = petChoice === "new";
-
-    if (isNewPet && !petAge) return t.errPet;
-    if (isNewPet && product.species === "Dog" && !product.breed_size_category && !petSize) return t.errSize;
-    if (!catalog.has_address && (!provinceId || !zoneId || addressText.trim().length < 3 || !deliverySlot)) {
-      return t.errAddress;
+    if (lines.some(line => line.species && line.species !== product.species)) return t.errOtherSpecies;
+    if (packLines.length === 0 && cartOthers.length === 0) return t.errNoPet;
+    if (lines.some(line => !line.animalId && !line.age)) return t.errPet;
+    if (lines.some(line => !line.animalId && product.species === "Dog" && !productFor(line)?.breed_size_category && !line.size)) {
+      return t.errSize;
     }
     if (!paymentMethod) return t.errPayment;
 
@@ -301,32 +896,60 @@ export default function CheckoutScreen() {
   };
 
   const buildPayload = (cardLast4: string): CheckoutPayload => {
-    const isNewPet = petChoice === "new";
+    // Points of the pet used on its first pack (switch of its card)
+    const usePointsOf = (animalId: number | null | undefined) => {
+      const card = orderCards.find(other => other.animalId === animalId);
+      return !!(card && animalId && animalId > 0 && cardPoints(card)?.on);
+    };
+
+    const items: CheckoutItem[] = packLines.map(line => ({
+      product_id: (productFor(line) as ShopProduct).id,
+      animal_id: line.animalId,
+      use_points: usePointsOf(line.animalId),
+      pet: line.animalId
+        ? null
+        : {
+            name: line.name.trim() || null,
+            age: line.age as LifeStage,
+            breed_size_category: (product as ShopProduct).species === "Dog" ? productFor(line)?.breed_size_category ?? line.size : null,
+          },
+      quantity: line.quantity,
+    }));
+
+    // + the plans chosen for the other pets
+    cartOthers.forEach(item =>
+      items.push(
+        (item.animalId < 0 && item.newPet
+          ? {
+              // New pet: created by the checkout
+              product_id: item.productId,
+              animal_id: null,
+              pet: {
+                name: item.newPet.name || null,
+                age: item.newPet.age as LifeStage,
+                breed_size_category: item.newPet.species === "Dog" ? (item.newPet.size as BreedSize) ?? null : null,
+              },
+              quantity: item.quantity,
+            }
+          : {
+              product_id: item.productId,
+              animal_id: item.animalId,
+              pet: null,
+              quantity: item.quantity,
+              use_points: usePointsOf(item.animalId),
+            }) as CheckoutItem
+      )
+    );
 
     return {
-      product_id: (product as ShopProduct).id,
+      items,
       payment_method: paymentMethod as CheckoutPayload["payment_method"],
       card_paid: true,
       card_last4: cardLast4 || null,
       customer_note: note.trim() || null,
-      animal_id: isNewPet ? null : (petChoice as number),
-      pet: isNewPet
-        ? {
-            name: petName.trim() || null,
-            age: petAge as LifeStage,
-            breed_size_category: (product as ShopProduct).species === "Dog" ? petSize : null,
-          }
-        : null,
-      address_id: catalog?.has_address ? addressId : null,
-      address: catalog?.has_address
-        ? null
-        : {
-            province_id: provinceId as number,
-            zone_id: zoneId as number,
-            address: addressText.trim(),
-            delivery_slot: deliverySlot as string,
-            note: addressNote.trim() || null,
-          },
+      // Address asked later, when the deliveries are planned
+      address_id: null,
+      address: null,
     };
   };
 
@@ -359,23 +982,69 @@ export default function CheckoutScreen() {
 
       const result = await shopCheckout(lang, buildPayload(cardLast4));
 
-      const petName = (result as any)?.animal?.name ?? "";
-      const status = (result as any)?.purchase?.status;
-      let paid = !!result.paid || status === "paid" || status === "active";
+      const purchases =
+        result.purchases && result.purchases.length > 0
+          ? result.purchases
+          : [
+              {
+                id: result.purchase.id,
+                reference: "",
+                status: result.purchase.status ?? "",
+                product_name: product.name,
+                animal_id: 0,
+                animal_name: (result as any)?.animal?.name ?? "",
+                unit_price: grandTotal,
+                discount_amount: 0,
+                total_amount: grandTotal,
+              },
+            ];
 
-      // Not confirmed by the checkout call: confirm the card payment now
+      let paid = !!result.paid || purchases.every(item => item.status === "paid" || item.status === "active");
+
+      // Not confirmed by the checkout call: confirm the card payment of each pack now
       if (!paid && paymentMethod) {
-        try {
-          const payment = await payShopPurchase(lang, result.purchase.id, paymentMethod, cardLast4);
-          const paidStatus = (payment as any)?.purchase?.status;
-          paid = !!payment.success && (paidStatus === "paid" || paidStatus === "active" || !paidStatus);
-        } catch (payError) {
-          console.warn("Card payment confirmation error:", payError);
+        paid = true;
+        for (const item of purchases) {
+          try {
+            const payment = await payShopPurchase(lang, item.id, paymentMethod, cardLast4);
+            const paidStatus = (payment as any)?.purchase?.status;
+            paid = paid && !!payment.success && (paidStatus === "paid" || paidStatus === "active" || !paidStatus);
+          } catch (payError) {
+            paid = false;
+            console.warn("Card payment confirmation error:", payError);
+          }
         }
       }
 
+      // Pack names of the receipt, from the order cards (before emptying the order)
+      const labels: Record<number, string> = {};
+      cartOthers.forEach(item => {
+        const fresh = catalog?.products.find(other => other.id === item.productId);
+        labels[item.animalId] = packLabel(fresh?.code ?? item.code, fresh?.total_recipes ?? item.totalRecipes, isArabic, item.productName);
+      });
+      packLines.forEach(line => {
+        const item = productFor(line);
+        if (line.animalId && item) labels[line.animalId] = packLabel(item.code, item.total_recipes, isArabic, item.name);
+      });
+
+      // Order done: the plans kept for the other pets are paid too
+      await clearOrderCart();
+      setCart([]);
+
       setPaySheetVisible(false);
-      setPaidOrder({ purchaseId: result.purchase.id, paid, petName, last4: cardLast4 });
+      setPaidOrder({
+        paid,
+        last4: cardLast4,
+        purchases,
+        labels,
+        total: result.total_amount ?? grandTotal,
+        // Discount without the points (shown on their own line)
+        discount: Math.max(0, (result.discount_amount ?? pricing.discount) - (result.loyalty_discount ?? 0)),
+        pointsUsed: result.loyalty_points_used ?? 0,
+        pointsDiscount: result.loyalty_discount ?? 0,
+        pointsEarned: (result.purchases ?? []).reduce((sum, item) => sum + (item.loyalty?.points_earned ?? 0), 0),
+        currency: result.currency ?? product.currency,
+      });
 
       confirmScale.setValue(0);
       Animated.spring(confirmScale, { toValue: 1, friction: 5, tension: 70, useNativeDriver: true }).start();
@@ -421,48 +1090,106 @@ export default function CheckoutScreen() {
         <Text style={styles.confirmTitle}>{paidOrder.paid ? t.paidTitle : t.pendingTitle}</Text>
         <Text style={styles.confirmText}>{paidOrder.paid ? t.paidText : t.pendingText}</Text>
 
-        {product0 && (
-          <View style={styles.receipt}>
-            <Text style={[styles.receiptName, dir]}>{product0.name}</Text>
-
-            {!!paidOrder.petName && (
-              <ReceiptRow label={t.paidFor} value={paidOrder.petName} isArabic={isArabic} />
-            )}
-            <ReceiptRow
-              label={t.paidAmount}
-              value={`${formatPrice(product0.current_price)} ${product0.currency}`}
-              isArabic={isArabic}
-              strong
-            />
-            <ReceiptRow
-              label={t.paidCard}
-              value={`${paymentMethod === "card" ? "Visa / Mastercard" : "KNET"} •••• ${paidOrder.last4}`}
-              isArabic={isArabic}
-            />
-
-            <View style={[styles.testPaid, isArabic && styles.rowRtl]}>
-              <Ionicons name="warning-outline" size={14} color={PCOLORS.danger} />
-              <Text style={styles.testPaidText}>{t.testPaid}</Text>
+        <View style={styles.receipt}>
+          {paidOrder.purchases.map(item => (
+            <View key={item.id} style={[styles.receiptLine, isArabic && styles.rowRtl]}>
+              <View style={styles.flex}>
+                <Text style={[styles.receiptName, dir]} numberOfLines={1}>
+                  {item.animal_name || product0?.name}
+                </Text>
+                <Text style={[styles.receiptLabel, dir]} numberOfLines={1}>
+                  {paidOrder.labels?.[item.animal_id] ?? item.product_name}
+                </Text>
+              </View>
+              <Text style={styles.receiptValue}>
+                {formatPrice(item.total_amount)} {paidOrder.currency}
+              </Text>
             </View>
+          ))}
+
+          {paidOrder.discount > 0 && (
+            <ReceiptRow label={t.discount} value={`-${formatPrice(paidOrder.discount)} ${paidOrder.currency}`} isArabic={isArabic} />
+          )}
+          {paidOrder.pointsDiscount > 0 && (
+            <ReceiptRow
+              label={`⭐ ${t.pointsLine} (${paidOrder.pointsUsed})`}
+              value={`-${formatPrice(paidOrder.pointsDiscount)} ${paidOrder.currency}`}
+              isArabic={isArabic}
+            />
+          )}
+          <ReceiptRow label={t.paidAmount} value={`${formatPrice(paidOrder.total)} ${paidOrder.currency}`} isArabic={isArabic} strong />
+          <ReceiptRow
+            label={t.paidCard}
+            value={`${paymentMethod === "card" ? "Visa / Mastercard" : "KNET"} •••• ${paidOrder.last4}`}
+            isArabic={isArabic}
+          />
+
+          {paidOrder.paid && paidOrder.pointsEarned > 0 && (
+            <View style={[styles.pointsEarned, isArabic && styles.rowRtl]}>
+              <Ionicons name="star" size={14} color={GOLD} />
+              <Text style={styles.pointsEarnedText}>{t.pointsEarned(paidOrder.pointsEarned)}</Text>
+            </View>
+          )}
+
+          <View style={[styles.testPaid, isArabic && styles.rowRtl]}>
+            <Ionicons name="warning-outline" size={14} color={PCOLORS.danger} />
+            <Text style={styles.testPaidText}>{t.testPaid}</Text>
+          </View>
+        </View>
+
+        {/* PREMIUM-... : no planning now, our team calls the customer first */}
+        {paidOrder.paid && product0?.requires_consultation && (
+          <View style={styles.consultationWrap}>
+            <ConsultationNote product={product0} isArabic={isArabic} />
           </View>
         )}
 
         <View style={styles.confirmButtons}>
-          {paidOrder.paid && (
-            <PrimaryButton
-              label={t.planDeliveries}
-              icon="calendar-outline"
-              onPress={() =>
-                router.replace({ pathname: "/distribute-package", params: { id: String(paidOrder.purchaseId) } } as any)
-              }
-            />
-          )}
+          {paidOrder.paid &&
+            !product0?.requires_consultation &&
+            // One button per pet (first pack of each pet; the next ones are planned later)
+            paidOrder.purchases
+              .filter((item, index, all) => all.findIndex(other => other.animal_id === item.animal_id) === index)
+              .map((item, index, firsts) => {
+                const single = product0?.rules.max_deliveries === 1;
+                const planned = plannedIds.includes(item.id);
+                const base = single ? (planned ? t.dayChosen : t.chooseDay) : t.planDeliveries;
+
+                return (
+                  <PrimaryButton
+                    key={item.id}
+                    label={firsts.length > 1 ? `${base} · ${item.animal_name}` : base}
+                    icon={planned ? "checkmark-circle-outline" : "calendar-outline"}
+                    onPress={() =>
+                      // Taste pack: only the day (no distribution form)
+                      single
+                        ? setQuickPlan({ id: item.id, petName: item.animal_name })
+                        : router.replace({ pathname: "/distribute-package", params: { id: String(item.id) } } as any)
+                    }
+                  />
+                );
+              })}
           <SecondaryButton
             label={t.viewSubscription}
             icon="receipt-outline"
-            onPress={() => router.replace({ pathname: "/purchase", params: { id: String(paidOrder.purchaseId) } } as any)}
+            onPress={() =>
+              // One pet: its profile (subscription card) / several pets: My Pets
+              new Set(paidOrder.purchases.map(item => item.animal_id)).size === 1 && paidOrder.purchases[0]?.animal_id
+                ? router.replace({ pathname: "/pet-form", params: { id: String(paidOrder.purchases[0].animal_id) } } as any)
+                : router.replace("/pets" as any)
+            }
           />
         </View>
+
+        <QuickDeliverySheet
+          visible={!!quickPlan}
+          purchaseId={quickPlan?.id ?? null}
+          petName={quickPlan?.petName}
+          isTastePack
+          isArabic={isArabic}
+          onClose={() => setQuickPlan(null)}
+          onPlanned={() => quickPlan && setPlannedIds(current => [...current, quickPlan.id])}
+        />
       </ScrollView>
     );
   }
@@ -486,7 +1213,6 @@ export default function CheckoutScreen() {
     );
   }
 
-  const petPlaceholder = product.species === "Dog" ? t.petNamePlaceholderDog : t.petNamePlaceholderCat;
   const slots = catalog?.delivery_slots ?? [];
 
   return (
@@ -496,151 +1222,234 @@ export default function CheckoutScreen() {
 
         <Text style={[styles.title, textDir]}>{t.title}</Text>
 
-        {/* PRODUCT SUMMARY */}
-        <View style={[styles.summary, isArabic && styles.rowRtl]}>
-          <View style={styles.summaryImage}>
-            <ProductImage product={product} height={64} />
-          </View>
-          <View style={styles.flex}>
-            <Text style={[styles.summaryName, textDir]} numberOfLines={2}>
-              {product.name}
-            </Text>
-            <Text style={[styles.summaryMeta, textDir]} numberOfLines={1}>
-              {[product.duration_label, product.total_recipes ? `${product.total_recipes} ${isArabic ? "وصفة" : "recipes"}` : ""].filter(Boolean).join(" · ")}
-            </Text>
-          </View>
-        </View>
+        {/* YOUR ORDER: one card per pet, same style for every pack */}
+        <Section title={t.yourOrder} isArabic={isArabic}>
+          {orderCards.length === 0 ? (
+            <Text style={[styles.emptyOrder, textDir]}>{t.errNoPet}</Text>
+          ) : (
+            orderCards.map(card => (
+              <View key={card.key} style={[styles.orderCard, isArabic && styles.rowRtl]}>
+                <View style={styles.orderCardImage}>
+                  {card.product ? (
+                    <ProductImage product={card.product} height={56} />
+                  ) : (
+                    <SpeciesIcon species={card.species === "Dog" ? "Dog" : "Cat"} size={26} />
+                  )}
+                </View>
 
-        {/* 1. PET */}
-        <Section title={t.petTitle} isArabic={isArabic}>
-          {compatiblePets.map(pet => (
-            <OptionRow
-              key={pet.id}
-              selected={petChoice === pet.id}
-              onPress={() => setPetChoice(pet.id)}
-              isArabic={isArabic}
-              icon={<SpeciesIcon species={pet.species} size={20} />}
-              title={pet.name}
-              subtitle={pet.age_label ?? undefined}
-            />
-          ))}
+                <View style={styles.flex}>
+                  <Text style={[styles.orderCardPet, textDir]} numberOfLines={1}>
+                    {card.petName}
+                  </Text>
+                  <Text style={[styles.orderCardProduct, textDir]} numberOfLines={1}>
+                    {card.productName}
+                  </Text>
+                  <View style={[styles.orderCardBottom, isArabic && styles.rowRtl]}>
+                    <Text style={styles.orderCardPrice}>
+                      {formatPrice(card.price * card.quantity)} {card.currency}
+                    </Text>
+                    <MiniStepper value={card.quantity} max={maxPacks} isArabic={isArabic} onChange={card.onQuantity} />
+                  </View>
+                  {card.quantity > 1 && (
+                    <Text style={[styles.orderCardHint, textDir]}>{t.packsInRow(card.quantity, card.petName)}</Text>
+                  )}
 
-          {compatiblePets.length > 0 && (
-            <OptionRow
-              selected={petChoice === "new"}
-              onPress={() => setPetChoice("new")}
-              isArabic={isArabic}
-              icon={<Ionicons name="add-circle-outline" size={20} color={PCOLORS.primary} />}
-              title={t.newPet}
-            />
+                  {/* LOYALTY POINTS of this pet (first pack) */}
+                  {(() => {
+                    const points = cardPoints(card);
+                    if (!points) return null;
+
+                    if (points.usable > 0) {
+                      return (
+                        <Pressable
+                          onPress={() => setPointsOff(current => ({ ...current, [card.animalId as number]: points.on }))}
+                          style={[styles.pointsRow, points.on && styles.pointsRowOn, isArabic && styles.rowRtl]}
+                        >
+                          <Ionicons name="star" size={15} color={GOLD} />
+                          <View style={styles.flex}>
+                            <Text style={[styles.pointsTitle, textDir]} numberOfLines={1}>{t.usePoints(points.usable)}</Text>
+                            <Text style={[styles.pointsSub, textDir]} numberOfLines={1}>
+                              {t.pointsSave(`${formatPrice(points.discount)} ${card.currency}`)}
+                            </Text>
+                          </View>
+                          <Switch
+                            value={points.on}
+                            onValueChange={value => setPointsOff(current => ({ ...current, [card.animalId as number]: !value }))}
+                            trackColor={{ false: PCOLORS.border, true: GOLD }}
+                            thumbColor={PCOLORS.white}
+                          />
+                        </Pressable>
+                      );
+                    }
+
+                    if (points.info.balance > 0) {
+                      return (
+                        <View style={[styles.pointsHint, isArabic && styles.rowRtl]}>
+                          <Ionicons name="star-outline" size={13} color={PCOLORS.muted} />
+                          <Text style={[styles.pointsHintText, textDir]} numberOfLines={1}>
+                            {t.pointsMissing(points.info.balance, points.info.missing_points)}
+                          </Text>
+                        </View>
+                      );
+                    }
+
+                    return null;
+                  })()}
+                </View>
+
+                <View style={styles.orderCardActions}>
+                  <Pressable onPress={card.onRemove} hitSlop={10} style={styles.orderCardRemove}>
+                    <Ionicons name="close" size={18} color={PCOLORS.muted} />
+                  </Pressable>
+                  {!!card.onEdit && (
+                    <Pressable onPress={card.onEdit} hitSlop={10} style={styles.orderCardRemove}>
+                      <Ionicons name="pencil" size={16} color={PCOLORS.primary} />
+                    </Pressable>
+                  )}
+                </View>
+              </View>
+            ))
           )}
 
-          {petChoice === "new" && (
-            <View style={styles.subForm}>
-              <Text style={[styles.label, textDir]}>{t.age}</Text>
-              <Chips
-                isArabic={isArabic}
-                items={product.age_options.map(option => ({ value: option.value, label: option.label }))}
-                value={petAge}
-                onChange={value => setPetAge(value as LifeStage)}
-              />
+          {/* PREMIUM-... : told BEFORE paying (no recipes / days to choose) */}
+          {orderCards.some(card => card.product?.requires_consultation) && (
+            <ConsultationNote product={{ ...(product as any), requires_consultation: true }} isArabic={isArabic} compact />
+          )}
+        </Section>
 
-              {product.species === "Dog" && !product.breed_size_category && (
-                <>
-                  <Text style={[styles.label, textDir]}>{t.size}</Text>
+        {/* New pet of this screen: small form only when something is missing or on "edit" */}
+        <View>
+          {/* New pets: the small form only when something is missing or on "edit" */}
+          {lines
+            .filter(line => !line.animalId)
+            .filter(line => !newPetReady(line) || !!editNew[line.key])
+            .map((line, index) => {
+              const species = line.species ?? (product.species as "Cat" | "Dog");
+              const otherSpecies = species !== product.species;
+              const item = otherSpecies ? null : productFor(line);
+              const placeholder =
+                (species === "Dog" ? t.petNamePlaceholderDog : t.petNamePlaceholderCat) + (index > 0 ? ` ${index + 1}` : "");
+              const ages = otherSpecies
+                ? (SPECIES_AGES[species] ?? []).map(value => ({ value, label: t.ageLabels[value] ?? value }))
+                : ageChoices;
+
+              return (
+                <View key={line.key} style={styles.newPetCard}>
+                  <View style={[styles.newPetHeader, isArabic && styles.rowRtl]}>
+                    <Ionicons name="paw-outline" size={18} color={PCOLORS.primary} />
+                    <Text style={[styles.newPetTitle, textDir]}>
+                      {t.newPetN}
+                      {lines.filter(other => !other.animalId).length > 1 ? ` ${index + 1}` : ""}
+                    </Text>
+                    {!!item && line.age && (
+                      <Text style={styles.newPetPrice}>
+                        {formatPrice(item.current_price)} {item.currency}
+                      </Text>
+                    )}
+                    <Pressable onPress={() => removeLine(line.key)} hitSlop={10}>
+                      <Ionicons name="close-circle" size={22} color={PCOLORS.muted} />
+                    </Pressable>
+                  </View>
+
+                  {/* Cat / Dog */}
                   <Chips
                     isArabic={isArabic}
-                    items={SIZES.map(size => ({ value: size, label: t.sizes[size] }))}
-                    value={petSize}
-                    onChange={value => setPetSize(value as BreedSize)}
+                    items={[
+                      { value: "Cat", label: t.cat },
+                      { value: "Dog", label: t.dog },
+                    ]}
+                    value={species}
+                    onChange={value => updateLine(line.key, { species: value as "Cat" | "Dog", age: null, size: null })}
                   />
-                </>
-              )}
 
-              <Text style={[styles.label, textDir]}>{t.petName}</Text>
-              <TextInput
-                value={petName}
-                onChangeText={setPetName}
-                placeholder={petPlaceholder}
-                placeholderTextColor={PCOLORS.muted}
-                style={[styles.input, textDir]}
-                maxLength={100}
-              />
+                  <Text style={[styles.label, textDir]}>{t.age}</Text>
+                  <Chips
+                    isArabic={isArabic}
+                    items={ages}
+                    value={line.age}
+                    onChange={value => updateLine(line.key, { age: value as LifeStage })}
+                  />
+
+                  {species === "Dog" && !item?.breed_size_category && (
+                    <>
+                      <Text style={[styles.label, textDir]}>{t.size}</Text>
+                      <Chips
+                        isArabic={isArabic}
+                        items={SIZES.map(size => ({ value: size, label: t.sizes[size] }))}
+                        value={line.size}
+                        onChange={value => updateLine(line.key, { size: value as BreedSize })}
+                      />
+                    </>
+                  )}
+
+                  <Text style={[styles.label, textDir]}>{t.petName}</Text>
+                  <TextInput
+                    value={line.name}
+                    onChangeText={value => updateLine(line.key, { name: value })}
+                    placeholder={placeholder}
+                    placeholderTextColor={PCOLORS.muted}
+                    style={[styles.input, textDir]}
+                    maxLength={100}
+                  />
+
+                  {otherSpecies ? (
+                    // This pack is for the other species: choose a plan suited to this pet
+                    <View style={styles.otherSpeciesBox}>
+                      <Text style={[styles.otherSpeciesText, textDir]}>
+                        {product.species === "Dog" ? t.packForDogs : t.packForCats}
+                      </Text>
+                      <Pressable
+                        onPress={() => void choosePlanForNewPet(line)}
+                        disabled={creatingPet}
+                        style={({ pressed }) => [styles.otherSpeciesButton, isArabic && styles.rowRtl, (pressed || creatingPet) && { opacity: 0.8 }]}
+                      >
+                        {creatingPet ? (
+                          <ActivityIndicator size="small" color={PCOLORS.white} />
+                        ) : (
+                          <>
+                            <Ionicons name="sparkles-outline" size={16} color={PCOLORS.white} />
+                            <Text style={styles.otherSpeciesButtonText}>{t.chooseSuitablePlan}</Text>
+                          </>
+                        )}
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <View style={[styles.newPetQty, isArabic && styles.rowRtl]}>
+                      <Text style={styles.qtyLabel}>{t.packs}</Text>
+                      <MiniStepper
+                        value={line.quantity}
+                        max={maxPacks}
+                        isArabic={isArabic}
+                        onChange={quantity => updateLine(line.key, { quantity })}
+                      />
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+
+          {/* ONE button: another pet (existing or new) + its plan, on its own page */}
+          {orderPetsCount < maxPets && (
+            <Pressable
+              onPress={() => router.push("/add-pet-plan" as any)}
+              style={({ pressed }) => [styles.addOtherPet, isArabic && styles.rowRtl, pressed && { opacity: 0.85 }]}
+            >
+              <Ionicons name="add-circle-outline" size={20} color={PCOLORS.primary} />
+              <Text style={styles.addOtherPetText}>{t.addOtherPet}</Text>
+            </Pressable>
+          )}
+
+          {discountPercent > 0 && (
+            <View style={[styles.discountBox, discountActive && styles.discountBoxActive, isArabic && styles.rowRtl]}>
+              <Ionicons name={discountActive ? "pricetag" : "pricetag-outline"} size={16} color={discountActive ? PCOLORS.white : PCOLORS.primary} />
+              <Text style={[styles.discountText, discountActive && styles.discountTextActive, textDir]}>
+                {discountActive ? t.discountApplied(percentLabel) : t.discountOffer(percentLabel)}
+              </Text>
             </View>
           )}
-        </Section>
+        </View>
 
-        {/* 2. ADDRESS */}
-        <Section title={t.addressTitle} isArabic={isArabic}>
-          {catalog?.has_address ? (
-            savedAddresses.map(address => (
-              <OptionRow
-                key={address.id}
-                selected={addressId === address.id}
-                onPress={() => setAddressId(address.id)}
-                isArabic={isArabic}
-                icon={<Ionicons name="location-outline" size={20} color={PCOLORS.primary} />}
-                title={address.label || [address.zone_label, address.province_label].filter(Boolean).join(", ") || address.address}
-                subtitle={[address.address, address.delivery_slot ? slotLabel(address.delivery_slot) : ""].filter(Boolean).join(" · ")}
-                tag={Number(address.is_default) ? t.defaultLabel : undefined}
-              />
-            ))
-          ) : (
-            <View>
-              <View style={[styles.twoCols, isArabic && styles.rowRtl]}>
-                <SelectBox
-                  label={t.province}
-                  value={province ? placeName(province) : ""}
-                  placeholder={t.choose}
-                  isArabic={isArabic}
-                  onPress={() => {
-                    setPickerSearch("");
-                    setPicker("province");
-                  }}
-                />
-                <SelectBox
-                  label={t.zone}
-                  value={zone ? placeName(zone) : ""}
-                  placeholder={t.choose}
-                  isArabic={isArabic}
-                  disabled={!province}
-                  onPress={() => {
-                    setPickerSearch("");
-                    setPicker("zone");
-                  }}
-                />
-              </View>
-
-              <Text style={[styles.label, textDir]}>{t.address}</Text>
-              <TextInput
-                value={addressText}
-                onChangeText={setAddressText}
-                placeholder={t.addressPlaceholder}
-                placeholderTextColor={PCOLORS.muted}
-                style={[styles.input, styles.multiline, textDir]}
-                multiline
-                maxLength={500}
-              />
-
-              <Text style={[styles.label, textDir]}>{t.slot}</Text>
-              <Chips
-                isArabic={isArabic}
-                items={slots.map(slot => ({ value: slot, label: slotLabel(slot) }))}
-                value={deliverySlot}
-                onChange={setDeliverySlot}
-              />
-
-              <Text style={[styles.label, textDir]}>{t.addressNote}</Text>
-              <TextInput
-                value={addressNote}
-                onChangeText={setAddressNote}
-                placeholderTextColor={PCOLORS.muted}
-                style={[styles.input, textDir]}
-                maxLength={1000}
-              />
-            </View>
-          )}
-        </Section>
+        {/* No address here: asked when the customer plans his deliveries */}
 
         {/* 3. PAYMENT */}
         <Section title={t.paymentTitle} isArabic={isArabic}>
@@ -666,14 +1475,24 @@ export default function CheckoutScreen() {
             />
           ))}
 
-          <Text style={[styles.label, textDir]}>{t.orderNote}</Text>
-          <TextInput
-            value={note}
-            onChangeText={setNote}
-            placeholderTextColor={PCOLORS.muted}
-            style={[styles.input, textDir]}
-            maxLength={1000}
-          />
+          {noteOpen ? (
+            <>
+              <Text style={[styles.label, textDir]}>{t.orderNote}</Text>
+              <TextInput
+                value={note}
+                onChangeText={setNote}
+                placeholderTextColor={PCOLORS.muted}
+                style={[styles.input, textDir]}
+                maxLength={1000}
+                autoFocus
+              />
+            </>
+          ) : (
+            <Pressable onPress={() => setNoteOpen(true)} hitSlop={6} style={[styles.linkButton, isArabic && styles.rowRtl]}>
+              <Ionicons name="create-outline" size={18} color={PCOLORS.primary} />
+              <Text style={styles.linkText}>{t.addNote}</Text>
+            </Pressable>
+          )}
         </Section>
       </ScrollView>
 
@@ -681,9 +1500,28 @@ export default function CheckoutScreen() {
       <View style={styles.footer}>
         {submitError !== "" && <Text style={[styles.submitError, textDir]}>{submitError}</Text>}
 
+        {pricing.discount > 0 && (
+          <View style={[styles.totalRow, isArabic && styles.rowRtl]}>
+            <Text style={styles.discountLabel}>{t.discount}</Text>
+            <Text style={styles.discountValue}>
+              -{formatPrice(pricing.discount)} {product.currency}
+            </Text>
+          </View>
+        )}
+        {pointsDiscount > 0 && (
+          <View style={[styles.totalRow, isArabic && styles.rowRtl]}>
+            <Text style={styles.pointsTotalLabel}>⭐ {t.pointsLine}</Text>
+            <Text style={styles.pointsTotalValue}>
+              -{formatPrice(pointsDiscount)} {product.currency}
+            </Text>
+          </View>
+        )}
         <View style={[styles.totalRow, isArabic && styles.rowRtl]}>
           <Text style={styles.totalLabel}>{t.total}</Text>
-          <PriceTag product={product} isArabic={isArabic} />
+          <Text style={styles.totalValue}>
+            {(pricing.discount > 0 || pointsDiscount > 0) && <Text style={styles.totalOld}>{formatPrice(pricing.subtotal)} </Text>}
+            {formatPrice(grandTotal)} <Text style={styles.totalCurrency}>{product.currency}</Text>
+          </Text>
         </View>
 
         <PrimaryButton label={t.confirm} icon="lock-closed-outline" loading={submitting} onPress={submit} />
@@ -694,7 +1532,7 @@ export default function CheckoutScreen() {
         <CardPaymentSheet
           visible={paySheetVisible}
           method={paymentMethod}
-          amount={product.current_price}
+          amount={grandTotal}
           currency={product.currency}
           isArabic={isArabic}
           onClose={() => !submitting && setPaySheetVisible(false)}
@@ -781,7 +1619,9 @@ function OptionRow({
   title,
   subtitle,
   tag,
+  multi,
 }: {
+  multi?: boolean;
   selected: boolean;
   onPress: () => void;
   isArabic: boolean;
@@ -806,8 +1646,71 @@ function OptionRow({
           </Text>
         )}
       </View>
-      <Ionicons name={selected ? "radio-button-on" : "radio-button-off"} size={22} color={selected ? PCOLORS.primary : PCOLORS.border} />
+      <Ionicons
+        name={multi ? (selected ? "checkbox" : "square-outline") : selected ? "radio-button-on" : "radio-button-off"}
+        size={22}
+        color={selected ? PCOLORS.primary : PCOLORS.border}
+      />
     </Pressable>
+  );
+}
+
+/** Compact − 1 + (number of packs of a pet). */
+function MiniStepper({
+  value,
+  max,
+  isArabic,
+  onChange,
+}: {
+  value: number;
+  max: number;
+  isArabic: boolean;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <View style={[styles.miniStepper, isArabic && styles.rowRtl]}>
+      <Pressable onPress={() => onChange(Math.max(1, value - 1))} disabled={value <= 1} hitSlop={8} style={[styles.miniStepButton, value <= 1 && styles.disabled]}>
+        <Ionicons name="remove" size={16} color={PCOLORS.text} />
+      </Pressable>
+      <Text style={styles.miniStepValue}>{value}</Text>
+      <Pressable onPress={() => onChange(Math.min(max, value + 1))} disabled={value >= max} hitSlop={8} style={[styles.miniStepButton, value >= max && styles.disabled]}>
+        <Ionicons name="add" size={16} color={PCOLORS.text} />
+      </Pressable>
+    </View>
+  );
+}
+
+function QuantityRow({
+  label,
+  value,
+  max,
+  hint,
+  isArabic,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  hint?: string;
+  isArabic: boolean;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <View style={styles.qtyWrap}>
+      <View style={[styles.qtyRow, isArabic && styles.rowRtl]}>
+        <Text style={styles.qtyLabel}>{label}</Text>
+        <View style={[styles.qtyControls, isArabic && styles.rowRtl]}>
+          <Pressable onPress={() => onChange(Math.max(1, value - 1))} disabled={value <= 1} hitSlop={8} style={[styles.qtyButton, value <= 1 && styles.disabled]}>
+            <Ionicons name="remove" size={18} color={PCOLORS.text} />
+          </Pressable>
+          <Text style={styles.qtyValue}>{value}</Text>
+          <Pressable onPress={() => onChange(Math.min(max, value + 1))} disabled={value >= max} hitSlop={8} style={[styles.qtyButton, value >= max && styles.disabled]}>
+            <Ionicons name="add" size={18} color={PCOLORS.text} />
+          </Pressable>
+        </View>
+      </View>
+      {!!hint && <Text style={[styles.qtyHint, isArabic && styles.textRtl]}>{hint}</Text>}
+    </View>
   );
 }
 
@@ -870,6 +1773,148 @@ function SelectBox({
 }
 
 const styles = StyleSheet.create({
+  addOtherPet: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    minHeight: 48,
+    marginTop: 4,
+    marginBottom: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: PCOLORS.primary,
+  },
+  addOtherPetText: { fontFamily: FONTS.bold, fontSize: 14, color: PCOLORS.primary },
+  otherSpeciesBox: {
+    marginTop: 12,
+    padding: 10,
+    gap: 8,
+    borderRadius: 8,
+    backgroundColor: PCOLORS.warningLight,
+  },
+  otherSpeciesText: { fontFamily: FONTS.medium, fontSize: 12.5, lineHeight: 19, color: PCOLORS.text },
+  otherSpeciesButton: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    height: 36,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: PCOLORS.primary,
+  },
+  otherSpeciesButtonText: { fontFamily: FONTS.bold, fontSize: 12.5, color: PCOLORS.white },
+  // Your order: same card for every pack
+  orderCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 10,
+    marginBottom: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: PCOLORS.border,
+    backgroundColor: PCOLORS.white,
+  },
+  orderCardImage: {
+    width: 56,
+    height: 56,
+    borderRadius: 10,
+    overflow: "hidden",
+    backgroundColor: PCOLORS.primaryLight,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  orderCardPet: { fontFamily: FONTS.bold, fontSize: 15, color: PCOLORS.text },
+  orderCardProduct: { fontFamily: FONTS.regular, fontSize: 12, color: PCOLORS.muted },
+  orderCardBottom: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 4 },
+  orderCardPrice: { fontFamily: FONTS.bold, fontSize: 14, color: PCOLORS.text },
+  orderCardHint: { marginTop: 4, fontFamily: FONTS.regular, fontSize: 11.5, lineHeight: 17, color: PCOLORS.muted },
+  orderCardRemove: { padding: 2 },
+  orderCardActions: { alignSelf: "stretch", justifyContent: "space-between", alignItems: "center" },
+  emptyOrder: { fontFamily: FONTS.regular, fontSize: 13, color: PCOLORS.muted, paddingVertical: 6 },
+  // Compact pet lines
+  selectAll: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", marginBottom: 8 },
+  selectAllText: { fontFamily: FONTS.bold, fontSize: 13, color: PCOLORS.primary },
+  petLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    minHeight: 52,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: PCOLORS.border,
+    backgroundColor: PCOLORS.white,
+  },
+  petLineSelected: { borderColor: PCOLORS.primary, backgroundColor: PCOLORS.primaryLight },
+  petLineName: { fontFamily: FONTS.bold, fontSize: 14, color: PCOLORS.text },
+  petLineAge: { fontFamily: FONTS.regular, fontSize: 12, color: PCOLORS.muted },
+  petLinePrice: { fontFamily: FONTS.semiBold, fontSize: 12, color: PCOLORS.primary },
+  miniStepper: { flexDirection: "row", alignItems: "center", gap: 8 },
+  miniStepButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: PCOLORS.border,
+    backgroundColor: PCOLORS.white,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  miniStepValue: { minWidth: 16, textAlign: "center", fontFamily: FONTS.bold, fontSize: 14, color: PCOLORS.text },
+  newPetQty: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 10 },
+  linksRow: { flexDirection: "row", flexWrap: "wrap", gap: 16, marginTop: 4, marginBottom: 6 },
+  linkButton: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 4 },
+  linkText: { fontFamily: FONTS.bold, fontSize: 13, color: PCOLORS.primary },
+  orderBox: {
+    marginBottom: 16,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: PCOLORS.border,
+    backgroundColor: PCOLORS.white,
+    gap: 8,
+  },
+  orderBoxHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  orderBoxTitle: { fontFamily: FONTS.bold, fontSize: 14, color: PCOLORS.text },
+  orderRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: PCOLORS.border },
+  orderPet: { fontFamily: FONTS.bold, fontSize: 13, color: PCOLORS.text },
+  orderProduct: { fontFamily: FONTS.regular, fontSize: 12, color: PCOLORS.muted },
+  orderPrice: { fontFamily: FONTS.bold, fontSize: 13, color: PCOLORS.text },
+  continuePets: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: PCOLORS.primary,
+  },
+  continuePetsTitle: { fontFamily: FONTS.bold, fontSize: 14, color: PCOLORS.primary },
+  continuePetsText: { fontFamily: FONTS.regular, fontSize: 12, lineHeight: 18, color: PCOLORS.muted },
+  otherPetsBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 12,
+    marginBottom: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#A8D7D1",
+    backgroundColor: PCOLORS.primaryLight,
+  },
+  otherPetsTitle: { fontFamily: FONTS.bold, fontSize: 13, lineHeight: 20, color: PCOLORS.text },
+  otherPetsText: { fontFamily: FONTS.regular, fontSize: 12, lineHeight: 18, color: PCOLORS.muted },
+  otherPetsButton: { paddingHorizontal: 12, height: 36, borderRadius: 8, backgroundColor: PCOLORS.primary, justifyContent: "center" },
+  otherPetsButtonText: { fontFamily: FONTS.bold, fontSize: 12, color: PCOLORS.white },
+  consultationWrap: { width: "100%", marginTop: 4 },
   screen: { flex: 1, backgroundColor: PCOLORS.background },
   content: { padding: 20, paddingBottom: 30 },
   flex: { flex: 1 },
@@ -913,6 +1958,59 @@ const styles = StyleSheet.create({
   optionSubtitle: { fontFamily: FONTS.regular, fontSize: 12, lineHeight: 18, color: PCOLORS.muted },
 
   subForm: { marginTop: 4 },
+
+  newPetCard: {
+    backgroundColor: PCOLORS.white,
+    borderWidth: 1,
+    borderColor: PCOLORS.primary,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+  },
+  newPetHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  newPetTitle: { flex: 1, fontFamily: FONTS.bold, fontSize: 14, color: PCOLORS.text },
+  newPetPrice: { fontFamily: FONTS.bold, fontSize: 13, color: PCOLORS.primary },
+  addPet: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: PCOLORS.primary,
+    borderRadius: 12,
+    paddingVertical: 12,
+    marginBottom: 8,
+  },
+  addPetText: { fontFamily: FONTS.bold, fontSize: 14, color: PCOLORS.primary },
+  discountBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    backgroundColor: PCOLORS.primaryLight,
+  },
+  discountBoxActive: { backgroundColor: PCOLORS.primary },
+  discountText: { flex: 1, fontFamily: FONTS.semiBold, fontSize: 13, color: PCOLORS.primary },
+  discountTextActive: { color: PCOLORS.white },
+  qtyWrap: { marginTop: 10 },
+  qtyRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  qtyLabel: { fontFamily: FONTS.semiBold, fontSize: 13, color: PCOLORS.text },
+  qtyControls: { flexDirection: "row", alignItems: "center", gap: 12 },
+  qtyButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: PCOLORS.border,
+    backgroundColor: PCOLORS.background,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  qtyValue: { minWidth: 18, textAlign: "center", fontFamily: FONTS.extraBold, fontSize: 16, color: PCOLORS.text },
+  qtyHint: { marginTop: 4, fontFamily: FONTS.regular, fontSize: 11, color: PCOLORS.muted },
   label: { fontFamily: FONTS.semiBold, fontSize: 13, color: PCOLORS.text, marginTop: 12, marginBottom: 6 },
   input: {
     minHeight: 48,
@@ -957,6 +2055,40 @@ const styles = StyleSheet.create({
   submitError: { fontFamily: FONTS.medium, fontSize: 13, color: PCOLORS.danger },
   totalRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   totalLabel: { fontFamily: FONTS.semiBold, fontSize: 15, color: PCOLORS.muted },
+  totalValue: { fontFamily: FONTS.extraBold, fontSize: 20, color: PCOLORS.text },
+  totalOld: { fontFamily: FONTS.medium, fontSize: 14, color: PCOLORS.muted, textDecorationLine: "line-through" },
+  totalCurrency: { fontFamily: FONTS.semiBold, fontSize: 13, color: PCOLORS.muted },
+  discountLabel: { fontFamily: FONTS.semiBold, fontSize: 13, color: PCOLORS.primary },
+  pointsTotalLabel: { fontFamily: FONTS.semiBold, fontSize: 13, color: "#9A6B00" },
+  pointsTotalValue: { fontFamily: FONTS.bold, fontSize: 14, color: "#9A6B00" },
+  pointsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#EBD9A5",
+    backgroundColor: "#FFFBF0",
+  },
+  pointsRowOn: { borderColor: GOLD, backgroundColor: "#FFF4D6" },
+  pointsTitle: { fontFamily: FONTS.bold, fontSize: 13, color: PCOLORS.text },
+  pointsSub: { fontFamily: FONTS.medium, fontSize: 12, color: "#9A6B00" },
+  pointsHint: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 6 },
+  pointsHintText: { flex: 1, fontFamily: FONTS.regular, fontSize: 12, color: PCOLORS.muted },
+  pointsEarned: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#FFF4D6",
+  },
+  pointsEarnedText: { fontFamily: FONTS.bold, fontSize: 13, color: "#9A6B00" },
+  discountValue: { fontFamily: FONTS.bold, fontSize: 14, color: PCOLORS.primary },
 
   knetBadge: { height: 24, minWidth: 44, borderRadius: 5, backgroundColor: "#0B4A8B", alignItems: "center", justifyContent: "center", paddingHorizontal: 5 },
   knetBadgeText: { fontFamily: FONTS.extraBold, fontSize: 10, color: PCOLORS.white, letterSpacing: 0.5 },
@@ -983,7 +2115,15 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 8,
   },
-  receiptName: { fontFamily: FONTS.bold, fontSize: 16, color: PCOLORS.text, marginBottom: 4 },
+  receiptName: { fontFamily: FONTS.bold, fontSize: 15, color: PCOLORS.text },
+  receiptLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: PCOLORS.border,
+  },
   receiptRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 },
   receiptLabel: { fontFamily: FONTS.regular, fontSize: 13, color: PCOLORS.muted },
   receiptValue: { flexShrink: 1, fontFamily: FONTS.semiBold, fontSize: 13, color: PCOLORS.text },

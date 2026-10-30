@@ -25,6 +25,9 @@ export type ShopProduct = {
   product_type: "regular" | "premium";
   is_premium: boolean;
   is_trial: boolean;
+  /** PREMIUM-... pack: recipes chosen by our team after a call */
+  requires_consultation?: boolean;
+  consultation_message?: string | null;
 
   price: number;
   current_price: number;
@@ -48,6 +51,27 @@ export type ShopProduct = {
   compatible_pet_ids: number[];
 };
 
+/** Loyalty points of a pet (checkout: "use my points") */
+export type PetLoyaltyInfo = {
+  balance: number;
+  /** balance minus the points kept on orders not paid yet */
+  available: number;
+  /** points usable now on one pack (0 = not enough) */
+  usable_points: number;
+  discount: number;
+  missing_points: number;
+  expires_on?: string | null;
+  level?: { name_en: string; name_ar: string; color: string; icon: string } | null;
+};
+
+export type LoyaltyProgram = {
+  enabled: boolean;
+  point_value: number;
+  currency: string;
+  min_points: number;
+  max_points: number;
+};
+
 export type ShopPet = {
   id: number;
   name: string;
@@ -56,6 +80,7 @@ export type ShopPet = {
   age_label?: string | null;
   breed_size_category?: BreedSize | null;
   photo_url?: string | null;
+  loyalty?: PetLoyaltyInfo | null;
 };
 
 export type ShopCatalogResponse = {
@@ -68,6 +93,11 @@ export type ShopCatalogResponse = {
   /** Shop: card payment only */
   payment_methods: { value: ShopPaymentMethod; label: string }[];
   delivery_slots: string[];
+  /** several pets in one order: discount on every pack */
+  multi_pet_discount?: MultiPetDiscount;
+  max_pets?: number;
+  max_packs_per_pet?: number;
+  loyalty_program?: LoyaltyProgram | null;
 };
 
 export type ShopProductResponse = {
@@ -78,8 +108,58 @@ export type ShopProductResponse = {
   has_address: boolean;
 };
 
-export type CheckoutPayload = {
+/** One line of the order = one pet (existing or new) + its pack + number of packs */
+export type CheckoutItem = {
   product_id: number;
+  animal_id?: number | null;
+  pet?: { name?: string | null; age: LifeStage; breed_size_category?: BreedSize | null } | null;
+  /** 1-3: packs one after the other for this pet */
+  quantity: number;
+  /** loyalty points of the pet used on its first pack */
+  use_points?: boolean;
+};
+
+export type MultiPetDiscount = {
+  percent: number;
+  min_pets: number;
+  applies_to_trial: boolean;
+};
+
+export type CheckoutResult = {
+  success: boolean;
+  message?: string;
+  paid?: boolean;
+  requires_login?: boolean;
+  animal_created?: boolean;
+  /** first purchase (old versions) */
+  purchase: { id: number; status?: string };
+  purchases?: {
+    id: number;
+    reference: string;
+    status: string;
+    product_name: string;
+    animal_id: number;
+    animal_name: string;
+    unit_price: number;
+    discount_amount: number;
+    total_amount: number;
+    loyalty?: { points_used: number; discount: number; points_earned: number };
+  }[];
+  pets_count?: number;
+  subtotal_amount?: number;
+  discount_amount?: number;
+  total_amount?: number;
+  currency?: string;
+  /** loyalty points used on the whole order + their discount */
+  loyalty_points_used?: number;
+  loyalty_discount?: number;
+};
+
+export type CheckoutPayload = {
+  /** several pets / packs (new) */
+  items?: CheckoutItem[];
+  /** one pet (old format) */
+  product_id?: number;
   payment_method: ShopPaymentMethod;
   /** card typed in the app (SIMULATION): the purchase is paid at once */
   card_paid?: boolean;
