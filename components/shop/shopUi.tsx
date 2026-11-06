@@ -14,14 +14,23 @@ import type { ShopProduct, ShopSpecies } from "../../types/shop";
 |--------------------------------------------------------------------------
 */
 
-/** Buy now: checkout, or sign in first (then back to checkout). */
-export function goToCheckout(productId: number) {
+/**
+ * Buy now: checkout, or sign in first (then back to checkout).
+ * quantity: packs chosen on the product page (1 by default).
+ */
+export function goToCheckout(productId: number, quantity = 1) {
+  const params: Record<string, string> = { productId: String(productId) };
+
+  if (quantity > 1) {
+    params.quantity = String(quantity);
+  }
+
   if (isSignedInNow()) {
-    router.push({ pathname: "/checkout", params: { productId: String(productId) } } as any);
+    router.push({ pathname: "/checkout", params } as any);
     return;
   }
 
-  router.push({ pathname: "/login", params: { redirect: "checkout", productId: String(productId) } } as any);
+  router.push({ pathname: "/login", params: { redirect: "checkout", ...params } } as any);
 }
 
 export function goToSignIn(redirect?: string) {

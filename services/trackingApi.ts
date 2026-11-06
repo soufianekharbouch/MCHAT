@@ -1,6 +1,8 @@
 import { getSessionToken } from "./session";
 
-const API_BASE_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
+import { API_MOBILE_URL } from "./apiConfig";
+
+const API_BASE_URL = API_MOBILE_URL;
 
 export type Lang = "ar" | "en";
 

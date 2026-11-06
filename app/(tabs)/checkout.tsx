@@ -25,6 +25,7 @@ import {
   fetchSavedAddresses,
   fetchShopProducts,
   payShopPurchase,
+  retryPayment,
   shopCheckout,
   ShopApiError,
   type Province,
@@ -40,6 +41,8 @@ import CardPaymentSheet from "../../components/shop/CardPaymentSheet";
 import { findGroup, groupProducts } from "../../components/shop/productGroups";
 import QuickDeliverySheet from "../../components/shop/QuickDeliverySheet";
 import { createPet } from "../../services/customerApi";
+import { resultAfterPayPage, waitForPaymentResult, type HesabeOutcome } from "../../services/hesabePayment";
+import HesabePaymentWebView, { type PayPageResult } from "../../components/shop/HesabePaymentWebView";
 import { addToOrderCart, clearOrderCart, getOrderCart, removeFromOrderCart, saveOrderCart, type OrderCartItem } from "../../services/orderCart";
 
 /*
@@ -56,10 +59,13 @@ import { addToOrderCart, clearOrderCart, getOrderCart, removeFromOrderCart, save
 |   2. Address : only the first time (governorate, area, address, slot),
 |                otherwise choice between the saved addresses
 |   3. Payment : card only (KNET or Visa / Mastercard).
-|                SIMULATION (no gateway yet): the card sheet asks any card
-|                data, then the order is sent with card_paid = true and the
-|                purchase is PAID at once (no "pending"). The checkout then
-|                shows the confirmation + "Plan my deliveries".
+|                HESABE (catalog.payment_gateway = "hesabe"): the order is
+|                sent, the secure Hesabe page opens, then the server tells
+|                if it is paid (never the phone). Not paid: "Pay again".
+|                SIMULATION (no gateway): the card sheet asks any card
+|                data, the order is sent with card_paid = true and the
+|                purchase is PAID at once. The checkout then shows the
+|                confirmation + "Plan my deliveries".
 |
 */
 
@@ -173,6 +179,12 @@ export default function CheckoutScreen() {
     pointsDiscount: number;
     pointsEarned: number;
     currency: string;
+    /** Real payment on the Hesabe page (not the test sheet) */
+    online?: boolean;
+    /** initiated | paid | failed | expired (online payment) */
+    status?: string;
+    transactionId?: number | null;
+    reference?: string | null;
   } | null>(null);
 
   // Loyalty points: used by default, the customer can switch them off (per pet)
@@ -185,6 +197,17 @@ export default function CheckoutScreen() {
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
+
+  // Hesabe payment page shown inside the app
+  const [payPage, setPayPage] = useState<{ url: string; transactionId: number } | null>(null);
+  const payPageResolve = useRef<null | ((result: PayPageResult) => void)>(null);
+
+  const closePayPage = (result: PayPageResult) => {
+    const resolve = payPageResolve.current;
+    payPageResolve.current = null;
+    if (resolve) resolve(result);
+    else setPayPage(null);
+  };
 
   const t = isArabic
     ? {
@@ -271,6 +294,20 @@ export default function CheckoutScreen() {
         planDeliveries: "تنظيم مواعيد التوصيل",
         viewSubscription: "عرض الاشتراك",
         testPaid: "دفع تجريبي - لم يتم خصم أي مبلغ",
+        addressOnce: "نحتاج عنوانك هذه المرة فقط، لتنظيم توصيلك تلقائياً.",
+        autoPaidText: "تم تأكيد اشتراكك وتنظيم مواعيد التوصيل تلقائياً. يمكنك تعديل المواعيد والوصفات في أي وقت.",
+        firstDelivery: "أول توصيل",
+        editDeliveries: "تعديل مواعيد التوصيل",
+        failedTitle: "لم يتم الدفع",
+        failedText: "لم يتم خصم أي مبلغ. طلبك محفوظ، يمكنك الدفع مرة أخرى.",
+        checkingTitle: "جارٍ تأكيد الدفع",
+        checkingText: "لم نتلقَّ تأكيد البنك بعد. سيتم تفعيل اشتراكك تلقائياً فور التأكيد.",
+        payAgain: "الدفع مرة أخرى",
+        checkAgain: "تحديث حالة الدفع",
+        paymentLabel: "الدفع",
+        paymentRef: "رقم العملية",
+        securePay: "دفع آمن: ستختار طريقة الدفع في الصفحة التالية.",
+        openingPayment: "جارٍ فتح صفحة الدفع الآمنة...",
       }
     : {
         back: "Back",
@@ -356,6 +393,20 @@ export default function CheckoutScreen() {
         planDeliveries: "Plan my deliveries",
         viewSubscription: "View my subscription",
         testPaid: "Test payment - no money was taken",
+        addressOnce: "We only need your address this once, to schedule your deliveries automatically.",
+        autoPaidText: "Your plan is confirmed and your deliveries are scheduled. You can change the dates and recipes at any time.",
+        firstDelivery: "First delivery",
+        editDeliveries: "Change my deliveries",
+        failedTitle: "Payment not completed",
+        failedText: "No money was taken. Your order is kept: you can pay again.",
+        checkingTitle: "Confirming your payment",
+        checkingText: "The bank has not confirmed yet. Your plan is activated automatically as soon as it does.",
+        payAgain: "Pay again",
+        checkAgain: "Refresh the payment status",
+        paymentLabel: "Payment",
+        paymentRef: "Reference",
+        securePay: "Secure payment: you choose how to pay on the next page.",
+        openingPayment: "Opening the secure payment page...",
       };
 
   /*
@@ -794,6 +845,42 @@ export default function CheckoutScreen() {
   // 1 -> 2 packs: asked once per pet (same pet one after the other, or another pet?)
   const [packsAsked, setPacksAsked] = useState<Record<string, boolean>>({});
 
+  /*
+   * Confirmation shown, then the customer leaves the checkout: everything is
+   * reset. Next time (new product, new pet) a new checkout, never the old
+   * confirmation. (The screen stays mounted: it is a hidden tab.)
+   */
+  const paidOrderRef = useRef(paidOrder);
+  paidOrderRef.current = paidOrder;
+
+  const resetCheckout = useCallback(() => {
+    setPaidOrder(null);
+    setLines([]);
+    linesKeyRef.current = "";
+    setPointsOff({});
+    setPlannedIds([]);
+    setQuickPlan(null);
+    setPayPage(null);
+    setPaySheetVisible(false);
+    setSubmitError("");
+    setSubmitting(false);
+    setNote("");
+    setNoteOpen(false);
+    setEditNew({});
+    setPacksAsked({});
+    confirmScale.setValue(0);
+  }, [confirmScale]);
+
+  useFocusEffect(
+    useCallback(
+      () => () => {
+        // Leaving the screen (blur) after a confirmation: fresh checkout next time
+        if (paidOrderRef.current) resetCheckout();
+      },
+      [resetCheckout]
+    )
+  );
+
 
   const choosePlanForNewPet = async (line: Line) => {
     if (creatingPet || !line.species) return;
@@ -890,12 +977,14 @@ export default function CheckoutScreen() {
     if (lines.some(line => !line.animalId && product.species === "Dog" && !productFor(line)?.breed_size_category && !line.size)) {
       return t.errSize;
     }
+    // New customer: address asked this time only (deliveries planned automatically)
+    if (!catalog.has_address && (!provinceId || !zoneId || !addressText.trim() || !deliverySlot)) return t.errAddress;
     if (!paymentMethod) return t.errPayment;
 
     return null;
   };
 
-  const buildPayload = (cardLast4: string): CheckoutPayload => {
+  const buildPayload = (cardLast4: string, online = false): CheckoutPayload => {
     // Points of the pet used on its first pack (switch of its card)
     const usePointsOf = (animalId: number | null | undefined) => {
       const card = orderCards.find(other => other.animalId === animalId);
@@ -944,12 +1033,21 @@ export default function CheckoutScreen() {
     return {
       items,
       payment_method: paymentMethod as CheckoutPayload["payment_method"],
-      card_paid: true,
-      card_last4: cardLast4 || null,
+      // Real payment: the server opens a Hesabe page (nothing paid here)
+      card_paid: !online,
+      card_last4: online ? null : cardLast4 || null,
       customer_note: note.trim() || null,
-      // Address asked later, when the deliveries are planned
+      // First order: the address of the form (saved as the default address)
       address_id: null,
-      address: null,
+      address: catalog?.has_address
+        ? null
+        : ({
+            province_id: provinceId,
+            zone_id: zoneId,
+            address: addressText.trim(),
+            delivery_slot: deliverySlot,
+            note: addressNote.trim() || null,
+          } as any),
     };
   };
 
@@ -965,7 +1063,176 @@ export default function CheckoutScreen() {
       return;
     }
 
+    // Real payment: secure Hesabe page (no card typed in the app)
+    if (onlinePayment) {
+      void payOnline();
+      return;
+    }
+
     setPaySheetVisible(true);
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | REAL PAYMENT (HESABE): order sent -> secure page -> result of the server
+  |--------------------------------------------------------------------------
+  */
+
+  const onlinePayment = (catalog as any)?.payment_gateway === "hesabe";
+
+  /*
+   * Hesabe page INSIDE the app (WebView over the checkout): resolved when
+   * the customer comes back from Hesabe or closes it, with the result of
+   * the server. The customer always stays on the checkout.
+   */
+  const openPayPage = (url: string, transactionId: number) =>
+    new Promise<HesabeOutcome>(resolve => {
+      payPageResolve.current = async (result: PayPageResult) => {
+        setPayPage(null);
+        // Result of the return page: no long waiting
+        resolve(await resultAfterPayPage(lang, transactionId, result));
+      };
+      setPayPage({ url, transactionId });
+    });
+
+  /** Pack names of the receipt, from the order cards (before emptying the order). */
+  const receiptLabels = () => {
+    const labels: Record<number, string> = {};
+    cartOthers.forEach(item => {
+      const fresh = catalog?.products.find(other => other.id === item.productId);
+      labels[item.animalId] = packLabel(fresh?.code ?? item.code, fresh?.total_recipes ?? item.totalRecipes, isArabic, item.productName);
+    });
+    packLines.forEach(line => {
+      const item = productFor(line);
+      if (line.animalId && item) labels[line.animalId] = packLabel(item.code, item.total_recipes, isArabic, item.name);
+    });
+    return labels;
+  };
+
+  const showConfirmation = () => {
+    confirmScale.setValue(0);
+    Animated.spring(confirmScale, { toValue: 1, friction: 5, tension: 70, useNativeDriver: true }).start();
+  };
+
+  const payOnline = async () => {
+    if (!product || submitting) return;
+
+    try {
+      setSubmitting(true);
+      setSubmitError("");
+
+      const result: any = await shopCheckout(lang, buildPayload("", true));
+      const purchases: NonNullable<CheckoutResult["purchases"]> = result.purchases ?? [];
+      const labels = receiptLabels();
+
+      // The order exists now (packs waiting for payment): the cart is emptied
+      await clearOrderCart();
+      setCart([]);
+
+      let paid = !!result.paid;
+      let status = paid ? "paid" : "initiated";
+      const payment = result.payment as { url?: string | null; transaction_id: number; reference: string } | null;
+
+      // Packs as known by the server after the payment (first delivery planned)
+      let latestPurchases: { id: number; first_delivery?: string | null }[] = [];
+
+      if (!paid && payment?.url) {
+        const outcome = await openPayPage(payment.url, payment.transaction_id);
+        paid = outcome.paid;
+        status = outcome.status;
+        latestPurchases = (outcome.data?.purchases ?? []) as any;
+      }
+
+      setPaidOrder({
+        paid,
+        last4: "",
+        purchases: purchases.map(item => {
+          const fresh = latestPurchases.find(other => other.id === item.id);
+          return { ...item, status: paid ? "paid" : item.status, first_delivery: fresh?.first_delivery ?? (item as any).first_delivery ?? null } as any;
+        }),
+        labels,
+        total: result.total_amount ?? grandTotal,
+        discount: Math.max(0, (result.discount_amount ?? pricing.discount) - (result.loyalty_discount ?? 0)),
+        pointsUsed: result.loyalty_points_used ?? 0,
+        pointsDiscount: result.loyalty_discount ?? 0,
+        pointsEarned: 0,
+        currency: result.currency ?? product.currency,
+        online: true,
+        status,
+        transactionId: payment?.transaction_id ?? null,
+        reference: payment?.reference ?? null,
+      });
+
+      showConfirmation();
+    } catch (e: any) {
+      if (e instanceof ShopApiError && (e.status === 401 || e.data?.requires_login)) {
+        await clearSession();
+        return;
+      }
+
+      setSubmitError(e?.message || "Error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  /** Not paid: new Hesabe page for the packs still waiting / or just ask again. */
+  const payAgain = async (onlyCheck = false) => {
+    if (!paidOrder?.transactionId || submitting) return;
+
+    try {
+      setSubmitting(true);
+
+      let transactionId = paidOrder.transactionId;
+      let reference = paidOrder.reference ?? null;
+      let paid = false;
+      let status = paidOrder.status ?? "initiated";
+      let latestPurchases: { id: number; first_delivery?: string | null }[] = [];
+
+      if (onlyCheck) {
+        const outcome = await waitForPaymentResult(lang, transactionId, 2);
+        paid = outcome.paid;
+        status = outcome.status;
+        latestPurchases = (outcome.data?.purchases ?? []) as any;
+      } else {
+        const retry = await retryPayment(lang, transactionId, paymentMethod);
+
+        transactionId = retry.payment.id;
+        reference = retry.payment.reference;
+
+        if (retry.already_paid || retry.payment.paid) {
+          paid = true;
+          status = "paid";
+        } else if (retry.payment_url) {
+          const outcome = await openPayPage(retry.payment_url, retry.payment.id);
+          paid = outcome.paid;
+          status = outcome.status;
+          latestPurchases = (outcome.data?.purchases ?? []) as any;
+        }
+      }
+
+      setPaidOrder(current =>
+        current
+          ? {
+              ...current,
+              paid,
+              status,
+              transactionId,
+              reference,
+              purchases: current.purchases.map(item => {
+                const fresh = latestPurchases.find(other => other.id === item.id);
+                return { ...item, status: paid ? "paid" : item.status, first_delivery: fresh?.first_delivery ?? (item as any).first_delivery ?? null } as any;
+              }),
+            }
+          : current
+      );
+
+      if (paid) showConfirmation();
+    } catch (e: any) {
+      Alert.alert("", e?.message || "Error");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   /*
@@ -1077,18 +1344,41 @@ export default function CheckoutScreen() {
 
     return (
       <ScrollView style={styles.screen} contentContainerStyle={styles.confirmContent}>
-        <Animated.View
-          style={[
-            styles.confirmCircle,
-            !paidOrder.paid && styles.confirmCirclePending,
-            { transform: [{ scale: confirmScale }] },
-          ]}
-        >
-          <Ionicons name={paidOrder.paid ? "checkmark" : "time-outline"} size={54} color={PCOLORS.white} />
-        </Animated.View>
+        {(() => {
+          // Online payment not paid: refused / cancelled, or the bank has not answered yet
+          const failed = !paidOrder.paid && paidOrder.online && paidOrder.status !== "initiated";
+          const checking = !paidOrder.paid && paidOrder.online && paidOrder.status === "initiated";
 
-        <Text style={styles.confirmTitle}>{paidOrder.paid ? t.paidTitle : t.pendingTitle}</Text>
-        <Text style={styles.confirmText}>{paidOrder.paid ? t.paidText : t.pendingText}</Text>
+          return (
+            <>
+              <Animated.View
+                style={[
+                  styles.confirmCircle,
+                  !paidOrder.paid && styles.confirmCirclePending,
+                  failed && { backgroundColor: PCOLORS.danger },
+                  { transform: [{ scale: confirmScale }] },
+                ]}
+              >
+                <Ionicons name={paidOrder.paid ? "checkmark" : failed ? "close" : "time-outline"} size={54} color={PCOLORS.white} />
+              </Animated.View>
+
+              <Text style={styles.confirmTitle}>
+                {paidOrder.paid ? t.paidTitle : failed ? t.failedTitle : checking ? t.checkingTitle : t.pendingTitle}
+              </Text>
+              <Text style={styles.confirmText}>
+                {paidOrder.paid
+                  ? paidOrder.purchases.some(item => !!(item as any).first_delivery)
+                    ? t.autoPaidText
+                    : t.paidText
+                  : failed
+                    ? t.failedText
+                    : checking
+                      ? t.checkingText
+                      : t.pendingText}
+              </Text>
+            </>
+          );
+        })()}
 
         <View style={styles.receipt}>
           {paidOrder.purchases.map(item => (
@@ -1100,6 +1390,11 @@ export default function CheckoutScreen() {
                 <Text style={[styles.receiptLabel, dir]} numberOfLines={1}>
                   {paidOrder.labels?.[item.animal_id] ?? item.product_name}
                 </Text>
+                {paidOrder.paid && !!(item as any).first_delivery && (
+                  <Text style={[styles.firstDelivery, dir]} numberOfLines={1}>
+                    🚚 {t.firstDelivery}: {deliveryDayLabel((item as any).first_delivery, isArabic)}
+                  </Text>
+                )}
               </View>
               <Text style={styles.receiptValue}>
                 {formatPrice(item.total_amount)} {paidOrder.currency}
@@ -1118,11 +1413,17 @@ export default function CheckoutScreen() {
             />
           )}
           <ReceiptRow label={t.paidAmount} value={`${formatPrice(paidOrder.total)} ${paidOrder.currency}`} isArabic={isArabic} strong />
-          <ReceiptRow
-            label={t.paidCard}
-            value={`${paymentMethod === "card" ? "Visa / Mastercard" : "KNET"} •••• ${paidOrder.last4}`}
-            isArabic={isArabic}
-          />
+          {paidOrder.online ? (
+            <>
+              {!!paidOrder.reference && <ReceiptRow label={t.paymentRef} value={paidOrder.reference} isArabic={isArabic} />}
+            </>
+          ) : (
+            <ReceiptRow
+              label={t.paidCard}
+              value={`${paymentMethod === "card" ? "Visa / Mastercard" : "KNET"} •••• ${paidOrder.last4}`}
+              isArabic={isArabic}
+            />
+          )}
 
           {paidOrder.paid && paidOrder.pointsEarned > 0 && (
             <View style={[styles.pointsEarned, isArabic && styles.rowRtl]}>
@@ -1131,10 +1432,13 @@ export default function CheckoutScreen() {
             </View>
           )}
 
-          <View style={[styles.testPaid, isArabic && styles.rowRtl]}>
-            <Ionicons name="warning-outline" size={14} color={PCOLORS.danger} />
-            <Text style={styles.testPaidText}>{t.testPaid}</Text>
-          </View>
+          {/* Test sheet only: no real money */}
+          {!paidOrder.online && (
+            <View style={[styles.testPaid, isArabic && styles.rowRtl]}>
+              <Ionicons name="warning-outline" size={14} color={PCOLORS.danger} />
+              <Text style={styles.testPaidText}>{t.testPaid}</Text>
+            </View>
+          )}
         </View>
 
         {/* PREMIUM-... : no planning now, our team calls the customer first */}
@@ -1145,6 +1449,18 @@ export default function CheckoutScreen() {
         )}
 
         <View style={styles.confirmButtons}>
+          {/* Online payment not paid: pay again (refused) / ask again (bank not answered) */}
+          {!paidOrder.paid && paidOrder.online && !!paidOrder.transactionId && (
+            paidOrder.status === "initiated" ? (
+              <>
+                <PrimaryButton label={t.checkAgain} icon="refresh-outline" loading={submitting} onPress={() => void payAgain(true)} />
+                <SecondaryButton label={t.payAgain} icon="card-outline" onPress={() => void payAgain(false)} />
+              </>
+            ) : (
+              <PrimaryButton label={t.payAgain} icon="card-outline" loading={submitting} onPress={() => void payAgain(false)} />
+            )
+          )}
+
           {paidOrder.paid &&
             !product0?.requires_consultation &&
             // One button per pet (first pack of each pet; the next ones are planned later)
@@ -1152,17 +1468,19 @@ export default function CheckoutScreen() {
               .filter((item, index, all) => all.findIndex(other => other.animal_id === item.animal_id) === index)
               .map((item, index, firsts) => {
                 const single = product0?.rules.max_deliveries === 1;
-                const planned = plannedIds.includes(item.id);
-                const base = single ? (planned ? t.dayChosen : t.chooseDay) : t.planDeliveries;
+                // Planned automatically after the payment: only "change"
+                const autoPlanned = !!(item as any).first_delivery;
+                const planned = autoPlanned || plannedIds.includes(item.id);
+                const base = autoPlanned ? t.editDeliveries : single ? (planned ? t.dayChosen : t.chooseDay) : t.planDeliveries;
 
                 return (
                   <PrimaryButton
                     key={item.id}
                     label={firsts.length > 1 ? `${base} · ${item.animal_name}` : base}
-                    icon={planned ? "checkmark-circle-outline" : "calendar-outline"}
+                    icon={autoPlanned ? "create-outline" : planned ? "checkmark-circle-outline" : "calendar-outline"}
                     onPress={() =>
                       // Taste pack: only the day (no distribution form)
-                      single
+                      single && !autoPlanned
                         ? setQuickPlan({ id: item.id, petName: item.animal_name })
                         : router.replace({ pathname: "/distribute-package", params: { id: String(item.id) } } as any)
                     }
@@ -1190,6 +1508,7 @@ export default function CheckoutScreen() {
           onClose={() => setQuickPlan(null)}
           onPlanned={() => quickPlan && setPlannedIds(current => [...current, quickPlan.id])}
         />
+        <HesabePaymentWebView visible={!!payPage} url={payPage?.url ?? null} isArabic={isArabic} onFinish={closePayPage} />
       </ScrollView>
     );
   }
@@ -1449,11 +1768,78 @@ export default function CheckoutScreen() {
           )}
         </View>
 
-        {/* No address here: asked when the customer plans his deliveries */}
+        {/* NEW CUSTOMER: address asked this time only (deliveries planned automatically) */}
+        {!catalog?.has_address && (
+          <Section title={t.addressTitle} isArabic={isArabic}>
+            <View style={[styles.addressOnce, isArabic && styles.rowRtl]}>
+              <Ionicons name="information-circle-outline" size={16} color={PCOLORS.primary} />
+              <Text style={[styles.addressOnceText, textDir]}>{t.addressOnce}</Text>
+            </View>
+
+            <View style={[styles.addressRow, isArabic && styles.rowRtl]}>
+              <SelectBox
+                label={t.province}
+                value={province ? placeName(province) : ""}
+                placeholder={t.choose}
+                isArabic={isArabic}
+                onPress={() => {
+                  setPickerSearch("");
+                  setPicker("province");
+                }}
+              />
+              <SelectBox
+                label={t.zone}
+                value={zone ? placeName(zone) : ""}
+                placeholder={t.choose}
+                isArabic={isArabic}
+                disabled={!province}
+                onPress={() => {
+                  setPickerSearch("");
+                  setPicker("zone");
+                }}
+              />
+            </View>
+
+            <Text style={[styles.label, textDir]}>{t.address}</Text>
+            <TextInput
+              value={addressText}
+              onChangeText={setAddressText}
+              placeholder={t.addressPlaceholder}
+              placeholderTextColor={PCOLORS.muted}
+              style={[styles.input, textDir]}
+              maxLength={500}
+            />
+
+            <Text style={[styles.label, textDir]}>{t.slot}</Text>
+            <Chips
+              isArabic={isArabic}
+              items={slots.map(slot => ({ value: slot, label: slotLabel(slot) }))}
+              value={deliverySlot}
+              onChange={setDeliverySlot}
+            />
+
+            <Text style={[styles.label, textDir]}>{t.addressNote}</Text>
+            <TextInput
+              value={addressNote}
+              onChangeText={setAddressNote}
+              placeholderTextColor={PCOLORS.muted}
+              style={[styles.input, textDir]}
+              maxLength={1000}
+            />
+          </Section>
+        )}
 
         {/* 3. PAYMENT */}
         <Section title={t.paymentTitle} isArabic={isArabic}>
-          {(catalog?.payment_methods ?? []).map(method => (
+          {/* Hesabe: the payment methods are chosen on the secure page */}
+          {onlinePayment && (
+            <View style={[styles.securePay, isArabic && styles.rowRtl]}>
+              <Ionicons name="lock-closed-outline" size={18} color={PCOLORS.primary} />
+              <Text style={[styles.securePayText, textDir]}>{t.securePay}</Text>
+            </View>
+          )}
+
+          {!onlinePayment && (catalog?.payment_methods ?? []).map(method => (
             <OptionRow
               key={method.value}
               selected={paymentMethod === method.value}
@@ -1524,11 +1910,12 @@ export default function CheckoutScreen() {
           </Text>
         </View>
 
+        {submitting && onlinePayment && <Text style={[styles.submitError, { color: PCOLORS.muted }, textDir]}>{t.openingPayment}</Text>}
         <PrimaryButton label={t.confirm} icon="lock-closed-outline" loading={submitting} onPress={submit} />
       </View>
 
       {/* CARD PAYMENT (simulation) */}
-      {!!paymentMethod && (
+      {!!paymentMethod && !onlinePayment && (
         <CardPaymentSheet
           visible={paySheetVisible}
           method={paymentMethod}
@@ -1540,6 +1927,8 @@ export default function CheckoutScreen() {
           showSuccess={false}
         />
       )}
+
+      <HesabePaymentWebView visible={!!payPage} url={payPage?.url ?? null} isArabic={isArabic} onFinish={closePayPage} />
 
       {/* PROVINCE / ZONE PICKER */}
       <Modal visible={picker !== null} transparent animationType="slide" onRequestClose={() => setPicker(null)}>
@@ -1590,6 +1979,13 @@ export default function CheckoutScreen() {
 | SMALL PARTS
 |--------------------------------------------------------------------------
 */
+
+/** "2026-11-03" -> "Tue 3 Nov" / "الثلاثاء 3 نوفمبر" */
+function deliveryDayLabel(value: string, isArabic: boolean): string {
+  const [y, m, d] = value.split("-").map(Number);
+  if (!y || !m || !d) return value;
+  return new Intl.DateTimeFormat(isArabic ? "ar" : "en-GB", { weekday: "short", day: "numeric", month: "short" }).format(new Date(y, m - 1, d));
+}
 
 function ReceiptRow({ label, value, isArabic, strong }: { label: string; value: string; isArabic: boolean; strong?: boolean }) {
   return (
@@ -1773,6 +2169,27 @@ function SelectBox({
 }
 
 const styles = StyleSheet.create({
+  securePay: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: PCOLORS.primaryLight,
+  },
+  securePayText: { flex: 1, fontFamily: FONTS.medium, fontSize: 13, lineHeight: 20, color: PCOLORS.text },
+  addressOnce: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+    padding: 10,
+    marginBottom: 10,
+    borderRadius: 8,
+    backgroundColor: PCOLORS.primaryLight,
+  },
+  addressOnceText: { flex: 1, fontFamily: FONTS.medium, fontSize: 12.5, lineHeight: 19, color: PCOLORS.text },
+  addressRow: { flexDirection: "row", gap: 10 },
+  firstDelivery: { marginTop: 2, fontFamily: FONTS.semiBold, fontSize: 12, color: PCOLORS.primary },
   addOtherPet: {
     flexDirection: "row",
     alignItems: "center",

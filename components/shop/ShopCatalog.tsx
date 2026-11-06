@@ -1,26 +1,17 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
 import { deleteStoredItem, getStoredItem, setStoredItem } from "../../services/storage";
 
 import { useAppLanguage } from "../../context/LanguageContext";
 import { useSession } from "../../services/session";
 import { fetchShopProducts } from "../../services/shopApi";
-import type { ShopCatalogResponse, ShopProduct, ShopSpecies } from "../../types/shop";
+import type { LifeStage, ShopCatalogResponse, ShopProduct, ShopSpecies } from "../../types/shop";
 
 import { CenteredLoader, ErrorState } from "../purchase/ScreenParts";
 import { FONTS, PCOLORS } from "../purchase/purchaseUtils";
-import {
-  ConsultationNote,
-  InfoChip,
-  PriceTag,
-  ProductBadges,
-  ProductImage,
-  SignInBanner,
-  SpeciesIcon,
-  goToCheckout,
-} from "./shopUi";
+import { ConsultationNote, ProductBadges, ProductImage, SignInBanner, SpeciesIcon, goToCheckout } from "./shopUi";
 import { groupProducts, type ShopProductGroup } from "./productGroups";
 
 /*
@@ -66,6 +57,29 @@ const KIND_ICON: Record<PackKind, React.ComponentProps<typeof Ionicons>["name"]>
   OTHER: "basket-outline",
 };
 
+/* Same look as the product page */
+const CORAL = "#EB6268";
+const CORAL_LIGHT = "#FDE9E7";
+const SUN = "#F6C945";
+
+const FEATURE_ICONS: Record<string, { family: "ion" | "mdi"; name: string }> = {
+  fresh: { family: "ion", name: "sparkles-outline" },
+  natural: { family: "ion", name: "leaf-outline" },
+  chilled: { family: "ion", name: "snow-outline" },
+  human_grade: { family: "ion", name: "restaurant-outline" },
+  no_preservatives: { family: "mdi", name: "flask-empty-off-outline" },
+  grain_free: { family: "mdi", name: "barley-off" },
+  vet_approved: { family: "mdi", name: "stethoscope" },
+};
+
+/** Short age labels (same as the product page) */
+const AGE_SHORT: Record<LifeStage, { en: string; ar: string }> = {
+  Kitten: { en: "Kitten", ar: "صغير" },
+  Puppy: { en: "Puppy", ar: "صغير" },
+  Adult: { en: "Adult", ar: "بالغ" },
+  Senior: { en: "Senior", ar: "كبير" },
+};
+
 export default function ShopCatalog() {
   const { isArabic } = useAppLanguage();
   const lang = isArabic ? "ar" : "en";
@@ -82,7 +96,7 @@ export default function ShopCatalog() {
   const t = isArabic
     ? {
         title: "اختر باقة حيوانك",
-        subtitle: "وجبات طازجة تصل إلى بابك. اختر العمر عند الطلب.",
+        subtitle: "وجبات طازجة تصل إلى بابك.",
         from: "ابتداءً من",
         ages: "الأعمار:",
         cats: "قطط",
@@ -96,6 +110,10 @@ export default function ShopCatalog() {
         recipes: "وصفة",
         details: "التفاصيل",
         yourPets: "لحيوانك",
+        currency: "د.ك",
+        freeDelivery: "توصيل مجاني",
+        bags: "أكياس",
+        bag: "كيس",
         sections: {
           REG: { title: "باقات الاشتراك", text: "وجباتك الطازجة كل شهر، توصيل منتظم إلى بابك." },
           TP: { title: "باقات التذوق", text: "ليجرّب حيوانك وصفاتنا قبل الاشتراك." },
@@ -105,7 +123,7 @@ export default function ShopCatalog() {
       }
     : {
         title: "Choose your pet's plan",
-        subtitle: "Fresh meals delivered to your door. Pick the age at checkout.",
+        subtitle: "Fresh meals delivered to your door.",
         from: "From",
         ages: "Ages:",
         cats: "Cats",
@@ -119,6 +137,10 @@ export default function ShopCatalog() {
         recipes: "recipes",
         details: "Details",
         yourPets: "For",
+        currency: "KWD",
+        freeDelivery: "Free delivery",
+        bags: "bags",
+        bag: "bag",
         sections: {
           REG: { title: "Subscription packs", text: "Your fresh meals every month, delivered to your door." },
           TP: { title: "Taste packs", text: "Let your pet try our recipes before subscribing." },
@@ -311,94 +333,136 @@ export default function ShopCatalog() {
             </View>
 
             {section.groups.map(group => {
-          const product = group.main;
-          const pets = petNames(group);
-          const samePrice = group.minPrice === group.maxPrice;
-          // PREMIUM-... (cats and dogs): own style
-          const premium = !!product.requires_consultation;
+              const product = group.main;
+              const pets = petNames(group);
+              const samePrice = group.minPrice === group.maxPrice;
+              // PREMIUM-... (cats and dogs): own style
+              const premium = !!product.requires_consultation;
+              const bags = Number(product.bags_count || 0);
+              const currency = product.currency === "KWD" ? t.currency : product.currency;
+              const features = product.features ?? [];
+              const ageLabels = group.ages.map(age => AGE_SHORT[age.value]?.[lang] ?? age.label);
 
-          return (
-            <Pressable
-              key={group.key}
-              onPress={() => openGroup(group)}
-              style={({ pressed }) => [styles.card, premium && styles.cardPremium, pressed && styles.pressed]}
-            >
-              {premium && (
-                <View style={[styles.premiumRibbon, isArabic && styles.rowRtl]}>
-                  <Ionicons name="diamond-outline" size={15} color={PCOLORS.white} />
-                  <Text style={styles.premiumRibbonText}>{t.premiumRibbon}</Text>
-                </View>
-              )}
-
-              <View>
-                <ProductImage product={product} height={170} />
-                <View style={[styles.badgesOverlay, isArabic ? styles.overlayRight : styles.overlayLeft]}>
-                  <ProductBadges product={product} isArabic={isArabic} />
-                </View>
-              </View>
-
-              <View style={styles.cardBody}>
-                <Text style={[styles.productName, premium && styles.productNamePremium, textDir]} numberOfLines={2}>
-                  {group.title}
-                </Text>
-
-                <View style={[styles.chips, isArabic && styles.rowRtl]}>
-                  <InfoChip icon="calendar-outline" label={product.duration_label} isArabic={isArabic} />
-                  <InfoChip
-                    icon="restaurant-outline"
-                    label={product.total_recipes ? `${product.total_recipes} ${t.recipes}` : ""}
-                    isArabic={isArabic}
-                  />
-                  {group.ages.length <= 1 && (
-                    <InfoChip icon="paw-outline" label={product.life_stages_label} isArabic={isArabic} />
+              return (
+                <Pressable
+                  key={group.key}
+                  onPress={() => openGroup(group)}
+                  style={({ pressed }) => [styles.card, premium && styles.cardPremium, pressed && styles.pressed]}
+                >
+                  {premium && (
+                    <View style={[styles.premiumRibbon, isArabic && styles.rowRtl]}>
+                      <Ionicons name="diamond-outline" size={15} color={PCOLORS.white} />
+                      <Text style={styles.premiumRibbonText}>{t.premiumRibbon}</Text>
+                    </View>
                   )}
-                </View>
 
-                {/* PREMIUM-... : recipes chosen by our team */}
-                <ConsultationNote product={product} isArabic={isArabic} compact />
+                  {/* PHOTO + badges */}
+                  <View style={styles.imageBox}>
+                    <ProductImage product={product} height={190} />
 
-                {/* Ages available for this pack */}
-                {group.ages.length > 1 && (
-                  <View style={[styles.ageRow, isArabic && styles.rowRtl]}>
-                    <Text style={styles.ageRowLabel}>{t.ages}</Text>
-                    {group.ages.map(age => (
-                      <View key={age.productId} style={styles.agePill}>
-                        <Text style={styles.agePillText}>{age.label}</Text>
+                    <View style={[styles.badgesOverlay, isArabic ? styles.overlayLeft : styles.overlayRight]}>
+                      <ProductBadges product={product} isArabic={isArabic} />
+                    </View>
+
+                    {bags > 0 && !premium && (
+                      <View style={[styles.bagsSticker, isArabic ? styles.overlayRight : styles.overlayLeft]}>
+                        <Text style={styles.bagsNumber}>{bags}</Text>
+                        <Text style={styles.bagsLabel}>{bags === 1 ? t.bag : t.bags}</Text>
                       </View>
-                    ))}
+                    )}
                   </View>
-                )}
 
-                {!!pets && (
-                  <Text style={[styles.forPets, textDir]} numberOfLines={1}>
-                    {t.yourPets} {pets}
-                  </Text>
-                )}
-
-                <View style={[styles.cardFooter, isArabic && styles.rowRtl]}>
-                  {samePrice ? (
-                    <PriceTag product={product} isArabic={isArabic} />
-                  ) : (
-                    <Text style={styles.fromPrice}>
-                      {t.from}{" "}
-                      <Text style={styles.fromPriceValue}>{group.minPrice.toFixed(3)}</Text>{" "}
-                      {product.currency}
+                  <View style={styles.cardBody}>
+                    {/* NAME + SUBTITLE */}
+                    <Text style={[styles.productName, premium && styles.productNamePremium]} numberOfLines={2}>
+                      {group.title}
                     </Text>
-                  )}
+                    {!!product.subtitle && (
+                      <Text style={styles.productSubtitle} numberOfLines={2}>
+                        {product.subtitle}
+                      </Text>
+                    )}
 
-                  <Pressable
-                    onPress={() => buyGroup(group)}
-                    hitSlop={6}
-                    style={({ pressed }) => [styles.buyButton, premium && styles.buyButtonPremium, pressed && styles.pressed]}
-                  >
-                    <Text style={styles.buyText}>
-                      {section.kind === "TP" ? t.buyTaste : section.kind === "PREMIUM" ? t.buyPremium : t.buy}
-                    </Text>
-                  </Pressable>
-                </View>
-              </View>
-            </Pressable>
-          );
+                    {/* PRICE + FREE DELIVERY */}
+                    <View style={[styles.priceRow, isArabic && styles.rowRtl]}>
+                      <View style={[styles.pricePill, isArabic && styles.rowRtl]}>
+                        {!samePrice && <Text style={styles.fromText}>{t.from}</Text>}
+                        <Text style={styles.priceText}>
+                          {(samePrice ? product.current_price : group.minPrice).toFixed(3)} {currency}
+                        </Text>
+                        {samePrice && product.has_promo && <Text style={styles.oldPrice}>{product.price.toFixed(3)}</Text>}
+                      </View>
+
+                      {product.free_delivery !== false && (
+                        <View style={[styles.deliveryPill, isArabic && styles.rowRtl]}>
+                          <MaterialCommunityIcons name="truck-delivery-outline" size={16} color={PCOLORS.primary} />
+                          <Text style={styles.deliveryText}>{t.freeDelivery}</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {/* AGES of the pack */}
+                    {ageLabels.length > 1 && (
+                      <View style={[styles.ageRow, isArabic && styles.rowRtl]}>
+                        {ageLabels.map((label, index) => (
+                          <View key={`${label}-${index}`} style={[styles.agePill, isArabic && styles.rowRtl]}>
+                            <MaterialCommunityIcons name={product.species === "Dog" ? "dog" : "cat"} size={15} color={PCOLORS.primary} />
+                            <Text style={styles.agePillText}>{label}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+
+                    {/* PREMIUM-... : recipes chosen by our team */}
+                    <ConsultationNote product={product} isArabic={isArabic} compact />
+
+                    {/* QUALITIES */}
+                    {features.length > 0 && !premium && (
+                      <View style={[styles.featuresRow, isArabic && styles.rowRtl]}>
+                        {features.slice(0, 3).map(feature => {
+                          const icon = FEATURE_ICONS[feature.key] ?? { family: "ion", name: "checkmark-circle-outline" };
+
+                          return (
+                            <View key={feature.key} style={styles.featureItem}>
+                              {icon.family === "mdi" ? (
+                                <MaterialCommunityIcons name={icon.name as any} size={18} color={PCOLORS.primary} />
+                              ) : (
+                                <Ionicons name={icon.name as any} size={18} color={PCOLORS.primary} />
+                              )}
+                              <Text style={styles.featureText} numberOfLines={2}>
+                                {feature.label}
+                              </Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    )}
+
+                    {!!pets && (
+                      <Text style={[styles.forPets, textDir]} numberOfLines={1}>
+                        {t.yourPets} {pets}
+                      </Text>
+                    )}
+
+                    {/* BUTTON */}
+                    <Pressable
+                      onPress={() => buyGroup(group)}
+                      hitSlop={6}
+                      style={({ pressed }) => [
+                        styles.buyButton,
+                        premium && styles.buyButtonPremium,
+                        isArabic && styles.rowRtl,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Ionicons name="cart-outline" size={19} color={PCOLORS.white} />
+                      <Text style={styles.buyText}>
+                        {section.kind === "TP" ? t.buyTaste : section.kind === "PREMIUM" ? t.buyPremium : t.buy}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </Pressable>
+              );
             })}
           </View>
         ))
@@ -445,35 +509,101 @@ const styles = StyleSheet.create({
 
   card: {
     backgroundColor: PCOLORS.white,
-    borderRadius: 18,
+    borderRadius: 24,
     overflow: "hidden",
-    marginBottom: 16,
+    marginBottom: 18,
     borderWidth: 1,
     borderColor: "#ECE6DD",
   },
+  imageBox: { margin: 10, marginBottom: 0, borderRadius: 18, overflow: "hidden" },
   badgesOverlay: { position: "absolute", top: 12 },
   overlayLeft: { left: 12 },
   overlayRight: { right: 12 },
-  cardBody: { padding: 16, gap: 10 },
-  productName: { fontFamily: FONTS.bold, fontSize: 17, lineHeight: 26, color: PCOLORS.text },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-  forPets: { fontFamily: FONTS.semiBold, fontSize: 12, color: PCOLORS.primary },
-  ageRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 },
-  ageRowLabel: { fontFamily: FONTS.semiBold, fontSize: 12, color: PCOLORS.muted },
-  agePill: {
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    backgroundColor: PCOLORS.card,
-    borderWidth: 1,
-    borderColor: PCOLORS.border,
+  bagsSticker: {
+    position: "absolute",
+    top: 10,
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: SUN,
+    alignItems: "center",
+    justifyContent: "center",
+    transform: [{ rotate: "-8deg" }],
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
   },
-  agePillText: { fontFamily: FONTS.semiBold, fontSize: 12, color: PCOLORS.text },
-  fromPrice: { fontFamily: FONTS.medium, fontSize: 13, color: PCOLORS.muted },
-  fromPriceValue: { fontFamily: FONTS.extraBold, fontSize: 20, color: PCOLORS.text },
-  cardFooter: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 4 },
-  buyButton: { backgroundColor: PCOLORS.dark, borderRadius: 10, paddingHorizontal: 16, height: 42, justifyContent: "center" },
-  buyText: { fontFamily: FONTS.bold, fontSize: 14, color: PCOLORS.white },
+  bagsNumber: { fontFamily: FONTS.extraBold, fontSize: 20, lineHeight: 24, color: PCOLORS.text },
+  bagsLabel: { fontFamily: FONTS.bold, fontSize: 11, lineHeight: 14, color: PCOLORS.text },
+
+  cardBody: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 16, gap: 10 },
+  productName: { fontFamily: FONTS.extraBold, fontSize: 20, lineHeight: 30, color: PCOLORS.text, textAlign: "center" },
+  productSubtitle: { marginTop: -8, fontFamily: FONTS.medium, fontSize: 13, color: PCOLORS.muted, textAlign: "center" },
+
+  priceRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, flexWrap: "wrap" },
+  pricePill: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 6,
+    backgroundColor: CORAL_LIGHT,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 3,
+  },
+  fromText: { fontFamily: FONTS.semiBold, fontSize: 12, color: CORAL },
+  priceText: { fontFamily: FONTS.extraBold, fontSize: 18, color: CORAL },
+  oldPrice: { fontFamily: FONTS.medium, fontSize: 12, color: PCOLORS.muted, textDecorationLine: "line-through" },
+  deliveryPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: PCOLORS.primaryLight,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  deliveryText: { fontFamily: FONTS.bold, fontSize: 12, color: PCOLORS.text },
+
+  ageRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 6 },
+  agePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    backgroundColor: "#F3EDE5",
+  },
+  agePillText: { fontFamily: FONTS.bold, fontSize: 12, color: PCOLORS.text },
+
+  featuresRow: { flexDirection: "row", gap: 8 },
+  featureItem: {
+    flex: 1,
+    alignItems: "center",
+    gap: 2,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#ECE6DD",
+  },
+  featureText: { fontFamily: FONTS.semiBold, fontSize: 11, lineHeight: 16, color: PCOLORS.text, textAlign: "center" },
+
+  forPets: { fontFamily: FONTS.semiBold, fontSize: 12, color: PCOLORS.primary, textAlign: "center" },
+
+  buyButton: {
+    marginTop: 2,
+    height: 48,
+    borderRadius: 999,
+    backgroundColor: PCOLORS.primary,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  buyText: { fontFamily: FONTS.extraBold, fontSize: 15, color: PCOLORS.white },
 
   // Sections REG- / TP- / PREMIUM-
   section: { marginBottom: 10 },

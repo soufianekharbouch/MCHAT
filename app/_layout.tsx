@@ -66,6 +66,8 @@ import {
   clearOrderCart,
 } from "../services/orderCart";
 
+import { API_MOBILE_URL } from "../services/apiConfig";
+
 
 /*
 |--------------------------------------------------------------------------
@@ -151,9 +153,7 @@ const registerDeviceOnce =
 |
 */
 
-const MOBILE_API_URL =
-  "https://animal-care2.kharbouch-soufiane.com/api/mobile";
-
+const MOBILE_API_URL = API_MOBILE_URL;
 
 const sendAppActivity =
   async (

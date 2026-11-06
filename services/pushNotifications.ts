@@ -1,12 +1,50 @@
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
-import * as SecureStore from "expo-secure-store";
 
+import * as SecureStore from "expo-secure-store";
 import Constants from "expo-constants";
 
 import { Platform } from "react-native";
 
-const API_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
+import { API_MOBILE_URL } from "./apiConfig";
+
+const API_URL = API_MOBILE_URL;
+/*
+ * Storage of the token / device id. expo-secure-store does not exist in
+ * the browser (Expo web): localStorage is used there.
+ */
+const IS_WEB_STORAGE = Platform.OS === "web";
+
+async function getStoredItem(key: string): Promise<string | null> {
+  try {
+    if (IS_WEB_STORAGE) {
+      return typeof window !== "undefined" && window.localStorage ? window.localStorage.getItem(key) : null;
+    }
+
+    return await SecureStore.getItemAsync(key);
+  } catch {
+    return null;
+  }
+}
+
+async function setStoredItem(key: string, value: string): Promise<void> {
+  try {
+    if (IS_WEB_STORAGE) {
+      if (typeof window !== "undefined" && window.localStorage) window.localStorage.setItem(key, value);
+      return;
+    }
+
+    await SecureStore.setItemAsync(key, value);
+  } catch {
+    // storage not available: the value is not kept
+  }
+}
+
+/*
+ * Push notifications exist only on Android / iOS.
+ * In the browser (Expo web) nothing is registered (no error).
+ */
+const IS_WEB = Platform.OS === "web";
 
 /*
 |--------------------------------------------------------------------------
@@ -82,7 +120,7 @@ function generateDeviceId() {
 */
 
 export async function getOrCreateDeviceId(): Promise<string> {
-  let deviceId = await SecureStore.getItemAsync("device_id");
+  let deviceId = await getStoredItem("device_id");
 
   if (deviceId) {
     return deviceId;
@@ -90,7 +128,7 @@ export async function getOrCreateDeviceId(): Promise<string> {
 
   deviceId = generateDeviceId();
 
-  await SecureStore.setItemAsync("device_id", deviceId);
+  await setStoredItem("device_id", deviceId);
 
   return deviceId;
 }
@@ -102,7 +140,7 @@ export async function getOrCreateDeviceId(): Promise<string> {
 */
 
 async function getDeviceLocale() {
-  const storedLocale = await SecureStore.getItemAsync("locale");
+  const storedLocale = await getStoredItem("locale");
 
   if (storedLocale === "ar" || storedLocale === "en") {
     return storedLocale;
@@ -123,7 +161,7 @@ export async function requestPushPermission() {
    * un vrai device.
    */
 
-  if (!Device.isDevice) {
+  if (IS_WEB || !Device.isDevice) {
     console.log("Push notifications require a physical device.");
 
     return false;
@@ -175,9 +213,9 @@ async function configureAndroidChannel() {
 }
 export async function detachCustomerFromDevice(): Promise<void> {
   try {
-    const deviceId = await SecureStore.getItemAsync("device_id");
+    const deviceId = await getStoredItem("device_id");
 
-    if (!deviceId) {
+    if (!deviceId || IS_WEB) {
       return;
     }
 
@@ -209,7 +247,7 @@ export async function detachCustomerFromDevice(): Promise<void> {
 */
 
 export async function getExpoPushToken(): Promise<string | null> {
-  if (!Device.isDevice) {
+  if (IS_WEB || !Device.isDevice) {
     console.log("Expo push token unavailable on simulator.");
 
     return null;
@@ -264,6 +302,16 @@ function getDeviceName() {
 export async function registerDevice(): Promise<RegisterDeviceResult> {
   const deviceId = await getOrCreateDeviceId();
 
+  // Browser: no push, no device to register (Laravel accepts android / ios)
+  if (IS_WEB) {
+    return {
+      success: false,
+      deviceId,
+      expoPushToken: null,
+      permissionGranted: false,
+    };
+  }
+
   await configureAndroidChannel();
 
   const permissionGranted = await requestPushPermission();
@@ -274,7 +322,7 @@ export async function registerDevice(): Promise<RegisterDeviceResult> {
     expoPushToken = await getExpoPushToken();
   }
 
-  const accessToken = await SecureStore.getItemAsync("access_token");
+  const accessToken = await getStoredItem("access_token");
 
   const locale = await getDeviceLocale();
 
@@ -368,7 +416,7 @@ export async function registerDevice(): Promise<RegisterDeviceResult> {
 | Associate device after login
 |--------------------------------------------------------------------------
 |
-| Après login réussi, access_token existe maintenant dans SecureStore.
+| Après login réussi, access_token existe maintenant sur le téléphone.
 | On rappelle simplement registerDevice().
 |
 | Laravel retrouvera le device_id existant et lui associera
@@ -406,13 +454,13 @@ export async function updateNotificationLocale() {
 */
 
 export async function unregisterDevice() {
-  const deviceId = await SecureStore.getItemAsync("device_id");
+  const deviceId = await getStoredItem("device_id");
 
-  if (!deviceId) {
+  if (!deviceId || IS_WEB) {
     return;
   }
 
-  const accessToken = await SecureStore.getItemAsync("access_token");
+  const accessToken = await getStoredItem("access_token");
 
   try {
     await fetch(`${API_URL}/device/unregister`, {

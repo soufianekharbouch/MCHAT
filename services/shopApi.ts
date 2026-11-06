@@ -8,9 +8,10 @@ import type {
   ShopProductResponse,
   ShopSpecies,
 } from "../types/shop";
+import { API_MOBILE_URL } from "./apiConfig";
 import { getSessionToken } from "./session";
 
-const API_BASE_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
+const API_BASE_URL = API_MOBILE_URL;
 
 export type Lang = "ar" | "en";
 
@@ -108,14 +109,69 @@ export function shopCheckout(lang: Lang, payload: CheckoutPayload) {
 
 /**
  * Card payment of a pending purchase (KNET / Visa / Mastercard).
- * SIMULATION for now: the server accepts the payment (only the last 4 digits are sent).
+ * Simulation server: paid at once (only the last 4 digits are sent).
+ * Hesabe server: answers payment.url (page to open, see openHesabePayment).
  */
 export function payShopPurchase(lang: Lang, purchaseId: number, paymentMethod: ShopPaymentMethod, cardLast4?: string | null) {
-  return request<{ success: boolean; message?: string; already_paid?: boolean; purchase: { id: number } }>(
+  return request<{ success: boolean; message?: string; already_paid?: boolean; paid?: boolean; payment?: OnlinePayment | null; purchase: { id: number } }>(
     `/purchases/${purchaseId}/pay`,
     lang,
     { payment_method: paymentMethod, card_last4: cardLast4 || null }
   );
+}
+
+/*
+| ONLINE PAYMENT (Hesabe: KNET / Visa / Mastercard)
+*/
+
+export type OnlinePaymentStatus = "initiated" | "paid" | "failed" | "expired";
+
+export type OnlinePayment = {
+  /** Payment page of Hesabe to open (checkout / retry / pay) */
+  required?: boolean;
+  gateway?: "hesabe";
+  url?: string | null;
+  transaction_id: number;
+  reference: string;
+  amount: number;
+};
+
+export type PaymentStatusResponse = {
+  success: boolean;
+  payment_url?: string | null;
+  already_paid?: boolean;
+  payment: {
+    id: number;
+    reference: string;
+    status: OnlinePaymentStatus;
+    paid: boolean;
+    amount: number;
+    currency: string;
+    method: string | null;
+    payment_id: string | null;
+    paid_at: string | null;
+  };
+  purchases: {
+    id: number;
+    reference: string;
+    status: string;
+    product_name: string;
+    animal_id: number;
+    animal_name: string;
+    total_amount: number;
+  }[];
+};
+
+/** Result of an online payment (asked to Hesabe by the server). */
+export function fetchPaymentStatus(lang: Lang, transactionId: number) {
+  return request<PaymentStatusResponse>(`/payments/${transactionId}/status`, lang);
+}
+
+/** New payment page for the packs of this payment still waiting. */
+export function retryPayment(lang: Lang, transactionId: number, paymentMethod?: ShopPaymentMethod | null) {
+  return request<PaymentStatusResponse>(`/payments/${transactionId}/retry`, lang, {
+    ...(paymentMethod ? { payment_method: paymentMethod } : {}),
+  });
 }
 
 /*
@@ -183,5 +239,40 @@ export function quickPlanPurchase(lang: Lang, purchaseId: number, date: string, 
   return request<{ success: boolean; message?: string; purchase: any }>(`/purchases/${purchaseId}/quick-plan`, lang, {
     date,
     delivery_slot: deliverySlot || null,
+  });
+}
+/*
+| ACCOUNT (side menu)
+*/
+
+export type AccountSummary = {
+  customer: { id: number; first_name?: string | null; last_name?: string | null; phone?: string | null; email?: string | null };
+  counters?: { addresses?: number; support_unread?: number };
+};
+
+/** Name, phone and counters of the side menu. */
+export function fetchAccountSummary(lang: Lang) {
+  return request<AccountSummary>("/settings", lang);
+}
+
+/**
+ * The customer deletes his account (second confirmation done in the app).
+ * Personal data removed, signed out everywhere; deliveries already paid
+ * are still delivered.
+ */
+export function deleteMyAccount(lang: Lang, reason?: string | null) {
+  return request<{ success: boolean; message?: string }>("/account/delete", lang, {
+    confirm: "DELETE",
+    reason: reason || null,
+  });
+}
+
+/*
+| ORDER NOT PAID: cancelled by the customer (the whole order)
+*/
+
+export function cancelShopPurchase(lang: Lang, purchaseId: number, reason?: string | null) {
+  return request<{ success: boolean; message?: string; cancelled_ids?: number[] }>(`/purchases/${purchaseId}/cancel`, lang, {
+    reason: reason || null,
   });
 }

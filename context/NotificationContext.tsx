@@ -11,7 +11,9 @@ import * as SecureStore from "expo-secure-store";
 
 import { useAppLanguage } from "../hooks/useAppLanguage";
 
-const API_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
+import { API_MOBILE_URL } from "../services/apiConfig";
+
+const API_URL = API_MOBILE_URL;
 
 export type MobileNotification = {
   id: number;

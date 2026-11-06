@@ -43,7 +43,10 @@ import {
 } from '../../components/purchase/purchaseUtils';
 import ShopCatalog from "../../components/shop/ShopCatalog";
 import LoyaltyBanner from "../../components/loyalty/LoyaltyBanner";
+import PendingOrderSheet from "../../components/shop/PendingOrderSheet";
 import { fetchLoyalty, levelIcon, type LoyaltyResponse } from "../../services/loyaltyApi";
+import { API_MOBILE_URL } from "../../services/apiConfig";
+import { cached, invalidateApiCache, throttled } from "../../services/apiCache";
 const COLORS = {
   background: '#F7F4EF',
   primary: '#249B97',
@@ -117,30 +120,53 @@ export default function HomeScreen() {
     purchases,
     setPurchases,
   ] = useState<PurchaseSummary[]>([]);
+  const lang = isArabic ? 'ar' : 'en';
+
+  /*
+   * Same POST as the other mobile calls (token in the body + header).
+   * Throws when the server refuses: nothing is cached.
+   */
+  const postMobile = async (endpoint: string) => {
+    const token = await getStoredItem('access_token');
+    if (!token) {
+      throw new Error('No session');
+    }
+    const response = await fetch(`${API_MOBILE_URL}${endpoint}`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ access_token: token, lang }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data?.message || `HTTP ${response.status}`);
+    }
+    return data;
+  };
+
+  /*
+   * Packs (purchases) of all pets: status, next delivery
+   * and "Choose a plan" button of each pet card.
+   * Kept 30 s, shared with My Pets (services/apiCache).
+   */
   const loadPurchases =
-    useCallback(async () => {
+    useCallback(async (force = false) => {
       if (isGuest) {
         setPurchases([]);
         return;
       }
       try {
         setPurchases(
-          await fetchPurchases(
-            isArabic ? 'ar' : 'en'
-          )
+          await cached(`purchases:${lang}`, () => fetchPurchases(lang), { force })
         );
       } catch (purchaseError) {
-        console.error(
-          'Unable to load purchases:',
-          purchaseError
-        );
+        console.warn('Unable to load purchases:', purchaseError);
       }
-    }, [isArabic, isGuest]);
-  useFocusEffect(
-    useCallback(() => {
-      void loadPurchases();
-    }, [loadPurchases])
-  );
+    }, [lang, isGuest]);
+
   /*
    * Saved addresses (label of the delivery address).
    */
@@ -149,49 +175,25 @@ export default function HomeScreen() {
     setAddresses,
   ] = useState<any[]>([]);
   const loadAddresses =
-    useCallback(async () => {
+    useCallback(async (force = false) => {
+      if (isGuest) {
+        return;
+      }
       try {
-        const token =
-          await getStoredItem(
-            'access_token'
-          );
-        if (!token) {
-          return;
-        }
-        const response = await fetch(
-          'https://animal-care2.kharbouch-soufiane.com/api/mobile/settings/addresses',
-          {
-            method: 'POST',
-            headers: {
-              Accept: 'application/json',
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              access_token: token,
-              lang: isArabic ? 'ar' : 'en',
-            }),
-          }
+        const data = await cached(
+          `addresses:${lang}`,
+          () => postMobile('/settings/addresses'),
+          { force, ttl: 120 * 1000 }
         );
-        const data = await response.json();
-        if (
-          response.ok &&
-          Array.isArray(data?.addresses)
-        ) {
-          setAddresses(data.addresses);
+        if (Array.isArray((data as any)?.addresses)) {
+          setAddresses((data as any).addresses);
         }
       } catch (addressError) {
-        console.error(
-          'Unable to load addresses:',
-          addressError
-        );
+        console.warn('Unable to load addresses:', addressError);
       }
-    }, [isArabic]);
-  useFocusEffect(
-    useCallback(() => {
-      void loadAddresses();
-    }, [loadAddresses])
-  );
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [lang, isGuest]);
+
   /*
    * Trial offers: pets with a trial pack still running
    * + packs with a "price during trial" (same API as the plans page).
@@ -201,28 +203,23 @@ export default function HomeScreen() {
     setCatalog,
   ] = useState<CatalogAnimal[]>([]);
   const loadCatalog =
-    useCallback(async () => {
+    useCallback(async (force = false) => {
       if (isGuest) {
         setCatalog([]);
         return;
       }
       try {
-        const data = await fetchProducts(
-          isArabic ? 'ar' : 'en'
+        const data = await cached(
+          `products:${lang}`,
+          () => fetchProducts(lang),
+          { force, ttl: 120 * 1000 }
         );
         setCatalog(data.animals || []);
       } catch (catalogError) {
-        console.error(
-          'Unable to load trial offers:',
-          catalogError
-        );
+        console.warn('Unable to load trial offers:', catalogError);
       }
-    }, [isArabic, isGuest]);
-  useFocusEffect(
-    useCallback(() => {
-      void loadCatalog();
-    }, [loadCatalog])
-  );
+    }, [lang, isGuest]);
+
   /*
    * Notifications of the customer (Recent updates, last ones first).
    */
@@ -231,44 +228,26 @@ export default function HomeScreen() {
     setNotifications,
   ] = useState<any[]>([]);
   const loadNotifications =
-    useCallback(async () => {
+    useCallback(async (force = false) => {
       if (isGuest) {
         setNotifications([]);
         return;
       }
       try {
-        const token = await getStoredItem('access_token');
-        if (!token) {
-          return;
-        }
-        const response = await fetch(
-          'https://animal-care2.kharbouch-soufiane.com/api/mobile/notifications',
-          {
-            method: 'POST',
-            headers: {
-              Accept: 'application/json',
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              access_token: token,
-              lang: isArabic ? 'ar' : 'en',
-            }),
-          }
+        const data = await cached(
+          `notifications:${lang}`,
+          () => postMobile('/notifications'),
+          { force, ttl: 60 * 1000 }
         );
-        const data = await response.json();
-        if (response.ok && Array.isArray(data?.notifications)) {
-          setNotifications(data.notifications);
+        if (Array.isArray((data as any)?.notifications)) {
+          setNotifications((data as any).notifications);
         }
       } catch (notificationError) {
-        console.error('Unable to load notifications:', notificationError);
+        console.warn('Unable to load notifications:', notificationError);
       }
-    }, [isArabic, isGuest]);
-  useFocusEffect(
-    useCallback(() => {
-      void loadNotifications();
-    }, [loadNotifications])
-  );
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [lang, isGuest]);
+
   /*
    * Loyalty points (per pet): total, badge of each pet, bottom banner.
    */
@@ -277,21 +256,31 @@ export default function HomeScreen() {
     setLoyalty,
   ] = useState<LoyaltyResponse | null>(null);
   const loadLoyalty =
-    useCallback(async () => {
+    useCallback(async (force = false) => {
       if (isGuest) {
         setLoyalty(null);
         return;
       }
       try {
-        setLoyalty(await fetchLoyalty(isArabic ? 'ar' : 'en'));
+        setLoyalty(await fetchLoyalty(lang, force));
       } catch (loyaltyError) {
         console.warn('Unable to load loyalty points:', loyaltyError);
       }
-    }, [isArabic, isGuest]);
+    }, [lang, isGuest]);
+
+  /*
+   * Home opened / opened again: ONE effect for all the data.
+   * Each call is reused if it is recent (30 s - 2 min), so going back
+   * and forth between screens does not call the server again.
+   */
   useFocusEffect(
     useCallback(() => {
+      void loadPurchases();
+      void loadAddresses();
+      void loadCatalog();
+      void loadNotifications();
       void loadLoyalty();
-    }, [loadLoyalty])
+    }, [loadPurchases, loadAddresses, loadCatalog, loadNotifications, loadLoyalty])
   );
   const loyaltyOn = !!loyalty?.program?.enabled;
   const petLoyalty = (pet: any) =>
@@ -321,13 +310,14 @@ export default function HomeScreen() {
         .filter(item => item.offers.length > 0),
     [catalog]
   );
+  // Pull to refresh: everything from the server, now
   const refreshAll = () => {
-    void refresh();
-    void loadPurchases();
-    void loadAddresses();
-    void loadCatalog();
-    void loadNotifications();
-    void loadLoyalty();
+    void throttled('customer-data', () => refresh(), { force: true });
+    void loadPurchases(true);
+    void loadAddresses(true);
+    void loadCatalog(true);
+    void loadNotifications(true);
+    void loadLoyalty(true);
   };
 
   /*
@@ -346,8 +336,9 @@ export default function HomeScreen() {
         return;
       }
 
+      // At most once every 30 s (shared with My Pets)
       if (!isGuest) {
-        void refreshRef.current();
+        void throttled('customer-data', () => refreshRef.current()).catch(() => undefined);
       }
     }, [isGuest])
   );
@@ -905,15 +896,16 @@ export default function HomeScreen() {
       },
     } as any);
   };
+  /*
+   * Order waiting for payment: pay now or cancel (sheet), no support
+   * needed. (The old "/purchase" page does not exist.)
+   */
+  const [pendingOrder, setPendingOrder] = useState<PurchaseSummary | null>(null);
+
   const openOrder = (
     purchase: PurchaseSummary
   ) => {
-    router.push({
-      pathname: '/purchase',
-      params: {
-        id: String(purchase.id),
-      },
-    } as any);
+    setPendingOrder(purchase);
   };
   const openPets = () => {
     router.push('/pets' as any);
@@ -1480,7 +1472,8 @@ export default function HomeScreen() {
           purchases={purchases}
           isArabic={isArabic}
           onPlanned={() => {
-            void loadPurchases();
+            invalidateApiCache();
+            void loadPurchases(true);
             void refresh();
           }}
         />
@@ -1499,7 +1492,7 @@ export default function HomeScreen() {
                 params: { animalId: String(animal.id) },
               } as any)
             }
-            onExpired={() => void loadCatalog()}
+            onExpired={() => void loadCatalog(true)}
           />
         ))}
         {nextOrder && (
@@ -2109,6 +2102,18 @@ export default function HomeScreen() {
       </ScrollView>
 
       {/* From time to time: points usable / lost soon */}
+      {/* Order waiting for payment: pay / cancel */}
+      <PendingOrderSheet
+        visible={!!pendingOrder}
+        purchase={pendingOrder}
+        isArabic={isArabic}
+        onClose={() => setPendingOrder(null)}
+        onChanged={() => {
+          setPendingOrder(null);
+          refreshAll();
+        }}
+      />
+
       <LoyaltyBanner data={loyalty} isArabic={isArabic} />
     </SafeAreaView>
   );

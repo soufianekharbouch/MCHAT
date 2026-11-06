@@ -29,8 +29,9 @@ import {
 
 import { useAppLanguage } from "../context/LanguageContext";
 
-const API_BASE_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
+import { API_MOBILE_URL } from "../services/apiConfig";
 
+const API_BASE_URL = API_MOBILE_URL;
 /*
 |--------------------------------------------------------------------------
 | FORGOT PASSWORD

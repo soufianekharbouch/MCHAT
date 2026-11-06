@@ -9,12 +9,36 @@ export type LifeStage = "Kitten" | "Puppy" | "Adult" | "Senior";
 export type BreedSize = "Small" | "Medium" | "Large";
 export type ShopPaymentMethod = "knet" | "card";
 
+/** One slide of the product carousel (main image first, then the gallery) */
+export type ProductMedia = {
+  id: string;
+  type: "image" | "video";
+  url: string;
+  /** video: image shown before it plays */
+  poster?: string | null;
+};
+
+export type ProductFeature = {
+  key: "fresh" | "natural" | "chilled" | "human_grade" | "no_preservatives" | "grain_free" | "vet_approved" | string;
+  label: string;
+};
+
+export type ProductContentItem = {
+  label: string;
+  quantity?: number | null;
+  image_url?: string | null;
+};
+
 export type ShopProduct = {
   id: number;
   code: string;
   name: string;
+  /** Short line under the name ("Try our fresh meals") */
+  subtitle?: string | null;
   description?: string | null;
   image_url?: string | null;
+  /** images + videos of the carousel (empty / missing: image_url only) */
+  media?: ProductMedia[];
 
   species: ShopSpecies;
   breed_size_category?: BreedSize | null;
@@ -40,6 +64,15 @@ export type ShopProduct = {
 
   duration_label: string;
   total_recipes: number;
+
+  /** Product page: badge "5 bags", bag weight, free delivery */
+  bags_count?: number | null;
+  bag_weight_grams?: number | null;
+  free_delivery?: boolean;
+  /** Qualities with an icon (fresh, natural, chilled...) */
+  features?: ProductFeature[];
+  /** "What's inside the pack" */
+  contents?: ProductContentItem[];
   rules: {
     min_deliveries: number;
     max_deliveries: number;
@@ -106,6 +139,8 @@ export type ShopProductResponse = {
   product: ShopProduct;
   pets: ShopPet[];
   has_address: boolean;
+  /** "Any question? WhatsApp" (international digits, null = hidden) */
+  whatsapp_number?: string | null;
 };
 
 /** One line of the order = one pet (existing or new) + its pack + number of packs */

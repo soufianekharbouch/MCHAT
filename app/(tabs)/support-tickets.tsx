@@ -4,8 +4,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 import { useAppLanguage } from '../../context/LanguageContext';
+import { API_MOBILE_URL } from '@/services/apiConfig';
 
-const API = 'https://animal-care2.kharbouch-soufiane.com/api/mobile/support-tickets';
+const API = `${API_MOBILE_URL}/support-tickets`;
 const C = { bg: '#F4F1EC', ink: '#272727', teal: '#249B97', muted: '#77736D', border: '#DCD4CA', white: '#FFFFFF', gold: '#E7A52D' };
 type Ticket = { id: number; title: string; status: string; created_at?: string; last_message_at?: string; messages_count?: number; messages?: { message: string; sender_type: string }[] };
 type Filter = 'all' | 'open' | 'resolved';

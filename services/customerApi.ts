@@ -5,9 +5,9 @@ import type {
   Pet,
 } from '../types/customer';
 
-const API_URL =
-  'https://animal-care2.kharbouch-soufiane.com/api/mobile';
+import { API_MOBILE_URL } from './apiConfig';
 
+const API_URL = API_MOBILE_URL;
 /*
 |--------------------------------------------------------------------------
 | API ERROR

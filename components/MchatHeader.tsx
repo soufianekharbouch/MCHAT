@@ -7,20 +7,29 @@ import {
   Dimensions,
   Image,
   Modal,
+  Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import * as SecureStore from "expo-secure-store";
 import { router, usePathname } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { detachCustomerFromDevice } from "../services/pushNotifications";
-import { getUnreadNotificationCount } from "../services/notificationApi";
+import {
+  getUnreadNotificationCount,
+  onPendingNotificationOpen,
+  openNotificationDestination,
+  takePendingNotificationOpen,
+} from "../services/notificationApi";
 import { useAppLanguage } from "../context/LanguageContext";
+import { clearSession, getSessionToken, useSession } from "../services/session";
 
-const API_BASE_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
+import { API_MOBILE_URL } from "../services/apiConfig";
+
+const API_BASE_URL = API_MOBILE_URL;
 
 const COLORS = {
   header: "#F4F1ECF5",
@@ -57,6 +66,8 @@ export default function MchatHeader() {
   const insets = useSafeAreaInsets();
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const { signedIn } = useSession();
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [profile, setProfile] = useState<CustomerProfile>({
     firstName: "",
@@ -69,17 +80,23 @@ export default function MchatHeader() {
   const overlayOpacity = useRef(new Animated.Value(0)).current;
 
   const loadUnreadNotifications = useCallback(async () => {
+    // Visitor: no bell, nothing to load
+    if (!signedIn) {
+      setUnreadNotifications(0);
+      return;
+    }
+
     try {
       const count = await getUnreadNotificationCount();
       setUnreadNotifications(count);
     } catch (error) {
       console.warn("Unread notifications error:", error);
     }
-  }, []);
+  }, [signedIn]);
 
   const loadCustomerProfile = useCallback(async () => {
     try {
-      const token = await SecureStore.getItemAsync("access_token");
+      const token = await getSessionToken();
       if (!token) {
         setProfile({ firstName: "", lastName: "" });
         return;
@@ -124,6 +141,42 @@ export default function MchatHeader() {
     });
     return () => subscription.remove();
   }, [loadUnreadNotifications, loadCustomerProfile]);
+
+  /*
+  |--------------------------------------------------------------------------
+  | PUSH TAPPED -> SCREEN OF THE NOTIFICATION
+  |--------------------------------------------------------------------------
+  |
+  | app/_layout.tsx records the tapped push (notificationApi). The header
+  | opens its screen a moment later, once the start of the app is done
+  | (otherwise the start would bring the app back to Home).
+  |
+  */
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const openPending = () => {
+      if (timer) clearTimeout(timer);
+
+      timer = setTimeout(() => {
+        const pending = takePendingNotificationOpen();
+
+        if (pending) {
+          openNotificationDestination(pending.destination, pending.params);
+          void loadUnreadNotifications();
+        }
+      }, 900);
+    };
+
+    openPending();
+    const unsubscribe = onPendingNotificationOpen(openPending);
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [loadUnreadNotifications]);
 
   useEffect(() => {
     if (!drawerVisible) {
@@ -180,7 +233,7 @@ export default function MchatHeader() {
     setLoggingOut(true);
 
     try {
-      const token = await SecureStore.getItemAsync("access_token");
+      const token = await getSessionToken();
 
       if (token) {
         try {
@@ -204,8 +257,7 @@ export default function MchatHeader() {
         console.warn("Device detach failed:", deviceError);
       }
 
-      await SecureStore.deleteItemAsync("access_token");
-      await SecureStore.deleteItemAsync("access_token_expires_at");
+      await clearSession();
       setUnreadNotifications(0);
       setProfile({ firstName: "", lastName: "" });
       setDrawerVisible(false);
@@ -243,6 +295,97 @@ export default function MchatHeader() {
     );
   };
 
+  /*
+  |--------------------------------------------------------------------------
+  | DELETE MY ACCOUNT (Apple / Google): 2 confirmations, then the server
+  | removes the personal data and signs the customer out everywhere
+  |--------------------------------------------------------------------------
+  */
+
+  const deleteAccount = async () => {
+    if (deleting) return;
+    setDeleting(true);
+
+    try {
+      const token = await getSessionToken();
+
+      const response = await fetch(`${API_BASE_URL}/account/delete`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ access_token: token, confirm: "DELETE", lang: isArabic ? "ar" : "en" }),
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok || data?.success === false) {
+        throw new Error(
+          data?.message ||
+            (isArabic ? "تعذر حذف الحساب. حاول مرة أخرى." : "Unable to delete your account. Please try again.")
+        );
+      }
+
+      try {
+        await detachCustomerFromDevice();
+      } catch {
+        // already detached by the server
+      }
+
+      await clearSession();
+      setUnreadNotifications(0);
+      setProfile({ firstName: "", lastName: "" });
+      setDrawerVisible(false);
+      router.replace("/(tabs)" as any);
+
+      setTimeout(
+        () =>
+          Alert.alert(
+            "",
+            isArabic
+              ? "تم حذف حسابك. شكراً لثقتك بـ Maison Chat."
+              : "Your account has been deleted. Thank you for trusting Maison Chat."
+          ),
+        350
+      );
+    } catch (error: any) {
+      Alert.alert(isArabic ? "خطأ" : "Error", error?.message || "Error");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const confirmDeleteAccount = () => {
+    Alert.alert(
+      isArabic ? "حذف الحساب" : "Delete account",
+      isArabic
+        ? "سيتم حذف حسابك وبياناتك الشخصية نهائياً وتسجيل خروجك من جميع الأجهزة.\n\n• الباقات غير المدفوعة ستُلغى.\n• التوصيلات المدفوعة مسبقاً ستصلك كما هو مخطط.\n\nلا يمكن التراجع عن هذا الإجراء."
+        : "Your account and personal data will be permanently deleted and you will be signed out on every device.\n\n• Unpaid plans will be cancelled.\n• Deliveries already paid will arrive as planned.\n\nThis cannot be undone.",
+      [
+        { text: isArabic ? "إلغاء" : "Cancel", style: "cancel" },
+        {
+          text: isArabic ? "متابعة" : "Continue",
+          style: "destructive",
+          onPress: () =>
+            Alert.alert(
+              isArabic ? "تأكيد الحذف النهائي؟" : "Delete permanently?",
+              isArabic ? "سيتم حذف حسابك الآن." : "Your account will be deleted now.",
+              [
+                { text: isArabic ? "إلغاء" : "Cancel", style: "cancel" },
+                {
+                  text: isArabic ? "حذف الحساب" : "Delete account",
+                  style: "destructive",
+                  onPress: () => void deleteAccount(),
+                },
+              ]
+            ),
+        },
+      ]
+    );
+  };
+
   const mainItems: DrawerRoute[] = [
     {
       key: "home",
@@ -266,6 +409,13 @@ export default function MchatHeader() {
       route: "/(tabs)/orders",
     },
     {
+      key: "loyalty",
+      icon: "star-outline",
+      labelEn: "Loyalty Points",
+      labelAr: "نقاط الولاء",
+      route: "/(tabs)/loyalty",
+    },
+    {
       key: "transition",
       icon: "book-outline",
       labelEn: "Transition Guide",
@@ -275,17 +425,56 @@ export default function MchatHeader() {
 
   const secondaryItems: DrawerRoute[] = [
     {
+      key: "addresses",
+      icon: "location-outline",
+      labelEn: "Saved Addresses",
+      labelAr: "العناوين المحفوظة",
+      route: "/(tabs)/saved-addresses",
+    },
+    {
+      key: "personal",
+      icon: "person-outline",
+      labelEn: "Personal Information",
+      labelAr: "المعلومات الشخصية",
+      route: "/(tabs)/personal-information",
+    },
+    {
       key: "help",
       icon: "chatbubble-outline",
       labelEn: "Help & Support",
       labelAr: "المساعدة والدعم",
+      route: "/(tabs)/support-tickets",
+    },
+    {
+      key: "knowledge",
+      icon: "help-circle-outline",
+      labelEn: "Help & Knowledge Base",
+      labelAr: "المساعدة وقاعدة المعرفة",
+      route: "/(tabs)/help_knowledge-base",
+    },
+  ];
+
+  /** Menu in 3 groups: daily use / my account / help */
+  const byKey = (key: string) => [...mainItems, ...secondaryItems].find(item => item.key === key)!;
+
+  const menuSections = [
+    {
+      key: "maison",
+      titleEn: "MY LITTLE MAISON",
+      titleAr: "منزلك الصغير",
+      items: ["home", "pets", "deliveries", "transition"].map(byKey),
     },
     {
       key: "account",
-      icon: "person-outline",
-      labelEn: "My Account",
-      labelAr: "حسابي",
-      route: "/(tabs)/settings",
+      titleEn: "MY ACCOUNT",
+      titleAr: "حسابي",
+      items: ["loyalty", "addresses", "personal"].map(byKey),
+    },
+    {
+      key: "help",
+      titleEn: "HELP",
+      titleAr: "المساعدة",
+      items: ["help", "knowledge"].map(byKey),
     },
   ];
 
@@ -299,12 +488,11 @@ export default function MchatHeader() {
     }
     if (item.key === "pets") return pathname.includes("pets");
     if (item.key === "deliveries") return pathname.includes("orders");
-    if (item.key === "account") {
-      return (
-        pathname.includes("settings") ||
-        pathname.includes("saved-addresses")
-      );
-    }
+    if (item.key === "loyalty") return pathname.includes("loyalty");
+    if (item.key === "addresses") return pathname.includes("saved-addresses");
+    if (item.key === "personal") return pathname.includes("personal-information");
+    if (item.key === "help") return pathname.includes("support-ticket");
+    if (item.key === "knowledge") return pathname.includes("help_knowledge");
     return false;
   };
 
@@ -326,7 +514,7 @@ export default function MchatHeader() {
       >
         <Ionicons
           name={item.icon}
-          size={24}
+          size={22}
           color={active ? COLORS.primary : "#77736D"}
         />
         <Text
@@ -393,6 +581,8 @@ export default function MchatHeader() {
               </Text>
             </Pressable>
 
+            {/* Bell: only for a signed in customer */}
+            {signedIn && (
             <Pressable
               hitSlop={8}
               onPress={() => router.push("/(tabs)/notifications" as any)}
@@ -410,6 +600,7 @@ export default function MchatHeader() {
                 <View style={styles.notificationDot} />
               )}
             </Pressable>
+            )}
           </View>
         </View>
       </SafeAreaView>
@@ -418,7 +609,8 @@ export default function MchatHeader() {
         visible={drawerVisible}
         transparent
         animationType="none"
-        statusBarTranslucent
+        // Android: the menu starts UNDER the system status bar
+        statusBarTranslucent={false}
         onRequestClose={() => closeDrawer()}
       >
         <View style={styles.modalRoot}>
@@ -437,18 +629,27 @@ export default function MchatHeader() {
               isArabic ? styles.drawerRight : styles.drawerLeft,
               {
                 width: DRAWER_WIDTH,
-                paddingTop: Math.max(insets.top, 18),
+                // iPhone: black strip under the notch (below), Android: nothing
+                paddingTop: 0,
                 paddingBottom: Math.max(insets.bottom, 18),
                 transform: [{ translateX: drawerTranslate }],
               },
             ]}
           >
+            {Platform.OS === "ios" && insets.top > 0 && (
+              <View style={[styles.safeTop, { height: insets.top }]} />
+            )}
+
+            {/* FIXED TOP: small logo + close */}
             <View style={[styles.drawerTop, isArabic && styles.rowReverse]}>
-              <Image
-                source={require("../assets/images/maison-chat-logo.png")}
-                style={styles.drawerLogo}
-                resizeMode="contain"
-              />
+              <View style={[styles.brand, isArabic && styles.brandRtl]}>
+                <Image
+                  source={require("../assets/images/maison-chat-logo.png")}
+                  style={styles.drawerLogo}
+                  resizeMode="contain"
+                />
+                <Text style={styles.drawerTagline}>FRESH FOOD. HAPPY PETS.</Text>
+              </View>
               <Pressable
                 onPress={() => closeDrawer()}
                 hitSlop={10}
@@ -457,29 +658,27 @@ export default function MchatHeader() {
                   pressed && styles.pressed,
                 ]}
               >
-                <Ionicons name="close" size={28} color={COLORS.textStrong} />
+                <Ionicons name="close" size={26} color={COLORS.textStrong} />
               </Pressable>
             </View>
 
-            <Text style={[styles.drawerTagline, isArabic && styles.textRtl]}>
-              FRESH FOOD. HAPPY PETS.
-            </Text>
-
-            <Text style={[styles.sectionLabel, isArabic && styles.textRtl]}>
-              {isArabic ? "منزلك الصغير" : "YOUR LITTLE MAISON"}
-            </Text>
-
-            <View style={styles.menuBlock}>
-              {mainItems.map(renderDrawerItem)}
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.menuBlock}>
-              {secondaryItems.map(renderDrawerItem)}
-            </View>
-
-            <View style={styles.drawerSpacer} />
+            {/* ONLY THE MENU SCROLLS */}
+            <ScrollView
+              style={styles.drawerScroll}
+              contentContainerStyle={styles.drawerScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {menuSections.map(section => (
+                <View key={section.key} style={styles.menuSection}>
+                  <Text style={[styles.sectionLabel, isArabic && styles.textRtl, isArabic && { letterSpacing: 0 }]}>
+                    {isArabic ? section.titleAr : section.titleEn}
+                  </Text>
+                  <View style={styles.menuBlock}>
+                    {section.items.map(renderDrawerItem)}
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
 
             <View style={styles.footerDivider} />
 
@@ -514,9 +713,10 @@ export default function MchatHeader() {
               />
             </Pressable>
 
+            {signedIn && (
             <Pressable
               onPress={confirmLogout}
-              disabled={loggingOut}
+              disabled={loggingOut || deleting}
               style={({ pressed }) => [
                 styles.logoutButton,
                 isArabic && styles.rowReverse,
@@ -536,6 +736,30 @@ export default function MchatHeader() {
                 {isArabic ? "تسجيل الخروج" : "Log Out"}
               </Text>
             </Pressable>
+            )}
+
+            {/* Delete my account (small link at the very bottom) */}
+            {signedIn && (
+              <Pressable
+                onPress={confirmDeleteAccount}
+                disabled={deleting || loggingOut}
+                hitSlop={8}
+                style={({ pressed }) => [
+                  styles.deleteButton,
+                  isArabic && styles.rowReverse,
+                  pressed && styles.pressed,
+                ]}
+              >
+                {deleting ? (
+                  <ActivityIndicator size="small" color={COLORS.coral} />
+                ) : (
+                  <Ionicons name="trash-outline" size={14} color={COLORS.coral} />
+                )}
+                <Text style={[styles.deleteText, isArabic && styles.textRtl]}>
+                  {isArabic ? "حذف حسابي" : "Delete my account"}
+                </Text>
+              </Pressable>
+            )}
           </Animated.View>
         </View>
       </Modal>
@@ -628,8 +852,9 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 0,
     bottom: 0,
+    overflow: "hidden",
     backgroundColor: COLORS.drawer,
-    paddingHorizontal: 26,
+    paddingHorizontal: 18,
     shadowColor: "#000",
     shadowOpacity: 0.18,
     shadowRadius: 16,
@@ -643,50 +868,58 @@ const styles = StyleSheet.create({
     right: 0,
   },
   drawerTop: {
-    minHeight: 105,
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     justifyContent: "space-between",
+    paddingTop: 14,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  brand: {
+    alignItems: "flex-start",
+  },
+  brandRtl: {
+    alignItems: "flex-end",
   },
   drawerLogo: {
-    width: 150,
-    height: 92,
-    marginLeft: 10,
+    width: 104,
+    height: 56,
   },
   closeButton: {
     width: 36,
-    height: 44,
-    marginTop: 0,
+    height: 40,
     alignItems: "center",
     justifyContent: "center",
   },
   drawerTagline: {
-    marginTop: -3,
-    marginLeft: 17,
+    marginTop: 2,
     fontFamily: "Cairo_500Medium",
     fontSize: 7,
-    letterSpacing: 2.4,
+    letterSpacing: 2,
     color: COLORS.muted,
   },
   sectionLabel: {
-    marginTop: 28,
+    marginBottom: 6,
+    marginHorizontal: 14,
+    fontFamily: "Cairo_700Bold",
+    fontSize: 11,
+    letterSpacing: 1.2,
+    color: "#A39E96",
+  },
+  menuSection: {
     marginBottom: 14,
-    marginHorizontal: 17,
-    fontFamily: "Cairo_500Medium",
-    fontSize: 10,
-    letterSpacing: 2.1,
-    color: "#8F8A83",
   },
   menuBlock: {
     gap: 2,
   },
   drawerItem: {
-    minHeight: 58,
-    paddingHorizontal: 17,
-    borderRadius: 13,
+    minHeight: 48,
+    paddingHorizontal: 14,
+    borderRadius: 12,
     flexDirection: "row",
     alignItems: "center",
-    gap: 18,
+    gap: 14,
   },
   drawerItemActive: {
     backgroundColor: COLORS.primaryLight,
@@ -697,8 +930,8 @@ const styles = StyleSheet.create({
   drawerItemText: {
     flex: 1,
     fontFamily: "Cairo_500Medium",
-    fontSize: 16,
-    lineHeight: 24,
+    fontSize: 15,
+    lineHeight: 22,
     color: COLORS.text,
   },
   drawerItemTextActive: {
@@ -711,26 +944,46 @@ const styles = StyleSheet.create({
     marginVertical: 14,
     marginHorizontal: 17,
   },
-  drawerSpacer: {
+  safeTop: {
+    backgroundColor: "#000000",
+    marginHorizontal: -18,
+  },
+  drawerScroll: {
     flex: 1,
-    minHeight: 20,
+  },
+  drawerScrollContent: {
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  deleteButton: {
+    minHeight: 30,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 5,
+  },
+  deleteText: {
+    fontFamily: "Cairo_400Regular",
+    fontSize: 11,
+    color: COLORS.coral,
+    textDecorationLine: "underline",
   },
   footerDivider: {
     height: 1,
     backgroundColor: COLORS.border,
-    marginBottom: 14,
+    marginBottom: 8,
   },
   profileFooter: {
-    minHeight: 67,
+    minHeight: 58,
     flexDirection: "row",
     alignItems: "center",
-    gap: 13,
+    gap: 12,
     paddingHorizontal: 5,
   },
   avatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: "#F2E6D8",
     alignItems: "center",
     justifyContent: "center",

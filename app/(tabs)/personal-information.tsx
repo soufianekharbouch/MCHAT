@@ -4,8 +4,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useAppLanguage } from "../../context/LanguageContext";
+import { API_MOBILE_URL } from "../../services/apiConfig";
 
-const API_BASE_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
+const API_BASE_URL = API_MOBILE_URL;
 const COLORS = { background: "#F4F1EC", text: "#272727", muted: "#77736D", border: "#D9D1C6", primary: "#249B97", dark: "#292929", danger: "#EB6268" };
 
 type Customer = { first_name?: string | null; last_name?: string | null; phone?: string | null; email?: string | null };

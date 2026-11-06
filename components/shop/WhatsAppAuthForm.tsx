@@ -30,6 +30,7 @@ import { useAppLanguage } from "../../context/LanguageContext";
 import { associateDeviceWithCustomer } from "../../services/pushNotifications";
 import { saveSession } from "../../services/session";
 import { sendAuthCode, ShopApiError, verifyAuthCode } from "../../services/shopApi";
+import { API_MOBILE_URL } from "@/services/apiConfig";
 
 /*
 |--------------------------------------------------------------------------
@@ -45,7 +46,7 @@ import { sendAuthCode, ShopApiError, verifyAuthCode } from "../../services/shopA
 |
 */
 
-const API_BASE_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
+const API_BASE_URL = API_MOBILE_URL;
 
 const COLORS = {
   background: "#F4F1EC",
@@ -114,7 +115,7 @@ export default function WhatsAppAuthForm({ mode }: { mode: "login" | "signup" })
         titleSignup: "إنشاء حساب",
         subtitleLogin: "أدخل رقم هاتفك وسنرسل لك رمز تحقق عبر واتساب.",
         subtitleSignup: "اسمك ورقم هاتفك فقط، وسنرسل لك رمز تحقق عبر واتساب.",
-        fullName: "الاسم الكامل",
+        fullName: "اسمك",
         fullNamePlaceholder: "مثال: سارة أحمد",
         phone: "رقم الهاتف المحمول (واتساب)",
         code: "رمز التحقق",
@@ -132,8 +133,9 @@ export default function WhatsAppAuthForm({ mode }: { mode: "login" | "signup" })
         signUp: "إنشاء حساب",
         haveAccount: "لديك حساب بالفعل؟",
         signIn: "تسجيل الدخول",
-        continueGuest: "تصفح المنتجات بدون حساب",
-        errName: "يرجى إدخال اسمك الكامل.",
+        continueGuest: "تصفّح منتجاتنا",
+        continueGuestHint: "بدون تسجيل الدخول · اكتشف باقاتنا ووجباتنا الطازجة",
+        errName: "يرجى إدخال اسمك.",
         errPhone: "يرجى إدخال رقم هاتف صحيح.",
         errCode: "يرجى إدخال الرمز المكوّن من 6 أرقام.",
         resent: "تم إرسال رمز جديد.",
@@ -144,7 +146,7 @@ export default function WhatsAppAuthForm({ mode }: { mode: "login" | "signup" })
         titleSignup: "Create Account",
         subtitleLogin: "Enter your phone number and we will send you a code on WhatsApp.",
         subtitleSignup: "Just your name and phone number, we will send you a code on WhatsApp.",
-        fullName: "Full name",
+        fullName: "Your name",
         fullNamePlaceholder: "e.g. Sara Ahmad",
         phone: "Mobile number (WhatsApp)",
         code: "Verification code",
@@ -162,8 +164,9 @@ export default function WhatsAppAuthForm({ mode }: { mode: "login" | "signup" })
         signUp: "Sign Up",
         haveAccount: "Already have an account?",
         signIn: "Sign In",
-        continueGuest: "Browse products without an account",
-        errName: "Please enter your full name.",
+        continueGuest: "Browse our products",
+        continueGuestHint: "No sign in needed · discover our plans and fresh meals",
+        errName: "Please enter your name.",
         errPhone: "Please enter a valid phone number.",
         errCode: "Please enter the 6-digit code.",
         resent: "A new code has been sent.",
@@ -422,7 +425,8 @@ export default function WhatsAppAuthForm({ mode }: { mode: "login" | "signup" })
                   <TextInput
                     value={phone}
                     onChangeText={setPhone}
-                    placeholder="+965 5000 0000"
+                    // Local Kuwaiti number, as the customer uses it (no +965)
+                    placeholder="5000 0000"
                     placeholderTextColor={COLORS.placeholder}
                     keyboardType="phone-pad"
                     textContentType="telephoneNumber"
@@ -525,8 +529,19 @@ export default function WhatsAppAuthForm({ mode }: { mode: "login" | "signup" })
             </Pressable>
           </View>
 
-          <Pressable onPress={continueAsGuest} style={styles.guestLink} hitSlop={8}>
-            <Text style={styles.guestText}>{t.continueGuest}</Text>
+          {/* BROWSE WITHOUT AN ACCOUNT: visible card-button */}
+          <Pressable
+            onPress={continueAsGuest}
+            style={({ pressed }) => [styles.guestButton, isArabic && styles.rowReverse, pressed && styles.pressed]}
+          >
+            <View style={styles.guestIcon}>
+              <MaterialCommunityIcons name="shopping-outline" size={24} color={COLORS.white} />
+            </View>
+            <View style={styles.flex}>
+              <Text style={[styles.guestTitle, textDir]}>{t.continueGuest}</Text>
+              <Text style={[styles.guestSubtitle, textDir]}>{t.continueGuestHint}</Text>
+            </View>
+            <Ionicons name={isArabic ? "chevron-back" : "chevron-forward"} size={20} color={COLORS.primary} />
           </Pressable>
 
           <Text style={styles.appVersion}>v{appVersion}</Text>
@@ -622,8 +637,29 @@ const styles = StyleSheet.create({
   switchRow: { marginTop: 28, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, flexWrap: "wrap" },
   switchLink: { fontFamily: "Cairo_700Bold", fontSize: 14, color: COLORS.text, textDecorationLine: "underline" },
 
-  guestLink: { alignSelf: "center", marginTop: 16, padding: 6 },
-  guestText: { fontFamily: "Cairo_600SemiBold", fontSize: 13, color: COLORS.primary },
+  guestButton: {
+    marginTop: 22,
+    minHeight: 72,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primaryLight,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  guestIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: COLORS.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  guestTitle: { fontFamily: "Cairo_700Bold", fontSize: 16, lineHeight: 24, color: COLORS.primary },
+  guestSubtitle: { fontFamily: "Cairo_400Regular", fontSize: 12, lineHeight: 18, color: COLORS.muted },
 
   appVersion: { alignSelf: "center", marginTop: 18, fontFamily: "Cairo_400Regular", fontSize: 9, color: COLORS.muted, opacity: 0.45 },
 });

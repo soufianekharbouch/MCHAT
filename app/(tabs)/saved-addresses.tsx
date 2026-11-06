@@ -19,9 +19,9 @@ import * as SecureStore from "expo-secure-store";
 import { router, useFocusEffect } from "expo-router";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAppLanguage } from "../../context/LanguageContext";
+import { API_MOBILE_URL } from "../../services/apiConfig";
 
-const API_BASE_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
-
+const API_BASE_URL = API_MOBILE_URL;
 const COLORS = {
   background: "#F4F1EC",
   primary: "#249B97",

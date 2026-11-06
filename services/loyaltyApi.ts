@@ -1,3 +1,4 @@
+import { API_MOBILE_URL } from "./apiConfig";
 import { getSessionToken } from "./session";
 
 /*
@@ -9,7 +10,7 @@ import { getSessionToken } from "./session";
 |
 */
 
-const API_BASE_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
+const API_BASE_URL = API_MOBILE_URL;
 
 export type LoyaltyLevel = {
   id: number;

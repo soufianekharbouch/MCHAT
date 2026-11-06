@@ -27,6 +27,7 @@ import {
 } from "../../context/LanguageContext";
 import { detachCustomerFromDevice } from "../../services/pushNotifications";
 import { fetchLoyalty, levelIcon, type LoyaltyResponse } from "../../services/loyaltyApi";
+import { API_MOBILE_URL } from "@/services/apiConfig";
 /*
 |--------------------------------------------------------------------------
 | COLORS
@@ -43,7 +44,7 @@ const COLORS = {
   gold: "#E7A52D",
   iconGray: "#7B7B76",
 };
-const API_BASE_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
+const API_BASE_URL = API_MOBILE_URL;
 type AccountData = {
   customer: {
     id: number;

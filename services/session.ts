@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { deleteStoredItem, getStoredItem, setStoredItem } from "./storage";
 import { clearOrderCart } from "./orderCart";
+import { API_MOBILE_URL } from "./apiConfig";
 
 /*
 |--------------------------------------------------------------------------
@@ -108,7 +109,7 @@ export async function logoutCustomer() {
 
   if (token) {
     try {
-      await fetch("https://animal-care2.kharbouch-soufiane.com/api/mobile/logout", {
+      await fetch(`${API_MOBILE_URL}/logout`, {
         method: "POST",
         headers: {
           Accept: "application/json",

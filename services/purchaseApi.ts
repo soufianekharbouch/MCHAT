@@ -9,6 +9,7 @@ import type {
   PurchaseSummary,
   SchedulePayload,
 } from "../types/purchase";
+import { API_MOBILE_URL } from "./apiConfig";
 
 /*
 |--------------------------------------------------------------------------
@@ -16,7 +17,7 @@ import type {
 |--------------------------------------------------------------------------
 */
 
-const API_BASE_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile";
+const API_BASE_URL = API_MOBILE_URL;
 
 export type Lang = "ar" | "en";
 

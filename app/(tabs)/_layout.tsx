@@ -382,6 +382,7 @@ export default function TabsLayout() {
 
           headerShown: true,
 
+          // MchatHeader: ☰ side menu (account pages, log out, delete account)
           header: () => (
             <MchatHeader />
           ),
@@ -592,32 +593,30 @@ export default function TabsLayout() {
 
         {/*
         |--------------------------------------------------------------------------
-        | ACCOUNT
+        | SHOP (always at the bottom right for a signed in customer)
         |--------------------------------------------------------------------------
+        |
+        | Visitor: the Home tab is already the shop -> hidden here.
+        |
         */}
 
         <Tabs.Screen
-          name="settings"
-
-          listeners={privateTab("/(tabs)/settings")}
-
+          name="shop"
           options={{
+            href: signedIn ? undefined : null,
 
-            title:
-              isArabic
-                ? "حسابي"
-                : "Account",
-
+            title: isArabic
+              ? "المتجر"
+              : "Shop",
 
             tabBarIcon: ({
               focused,
             }) => (
               <TabIcon
                 focused={focused}
-                type="account"
+                type="shop"
               />
             ),
-
 
             tabBarLabel: ({
               focused,
@@ -627,11 +626,32 @@ export default function TabsLayout() {
                 isArabic={isArabic}
               >
                 {isArabic
-                  ? "حسابي"
-                  : "Account"}
+                  ? "المتجر"
+                  : "Shop"}
               </TabLabel>
             ),
+          }}
+        />
 
+
+        {/*
+        |--------------------------------------------------------------------------
+        | ACCOUNT (no tab any more: side menu ☰)
+        |--------------------------------------------------------------------------
+        |
+        | The page stays available (old links).
+        |
+        */}
+
+        <Tabs.Screen
+          name="settings"
+          listeners={privateTab("/(tabs)/settings")}
+          options={{
+            href: null,
+            title:
+              isArabic
+                ? "حسابي"
+                : "Account",
           }}
         />
 
@@ -820,20 +840,10 @@ export default function TabsLayout() {
         | SHOP: CATALOG + PRODUCT + CHECKOUT (hidden)
         |--------------------------------------------------------------------------
         |
-        | No "Shop" tab: visitors see the catalog on the Home tab.
-        | /shop stays available for signed in customers.
+        | "Shop" tab: see above (signed in). Visitors see the catalog on
+        | the Home tab.
         |
         */}
-
-        <Tabs.Screen
-          name="shop"
-          options={{
-            href: null,
-            title: isArabic
-              ? "المتجر"
-              : "Shop",
-          }}
-        />
 
         <Tabs.Screen
           name="shop-product"
@@ -890,6 +900,7 @@ export default function TabsLayout() {
 */
 
 const styles = StyleSheet.create({
+
 
   /*
   |--------------------------------------------------------------------------

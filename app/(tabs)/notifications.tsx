@@ -7,6 +7,7 @@ import React, {
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -26,12 +27,17 @@ import {
 
 import {
   router,
+  useFocusEffect,
 } from "expo-router";
 
 import {
   dismissNotificationSafe,
   getNotifications,
-  markNotificationViewedSafe,
+  hasNotificationDestination,
+  markNotificationOpenedSafe,
+  markNotificationSeenSafe,
+  notificationActionLabel,
+  openNotificationDestination,
   type MobileNotification,
 } from "../../services/notificationApi";
 
@@ -108,6 +114,8 @@ export default function NotificationsScreen() {
             "تعذر تحميل الإشعارات",
           read:
             "مقروء",
+          unread:
+            "جديد",
           deleteTitle:
             "حذف الإشعار",
           deleteMessage:
@@ -130,6 +138,8 @@ export default function NotificationsScreen() {
             "Unable to load notifications",
           read:
             "Read",
+          unread:
+            "New",
           deleteTitle:
             "Remove notification",
           deleteMessage:
@@ -378,6 +388,24 @@ export default function NotificationsScreen() {
   );
 
 
+  // Back on the screen: new notifications without loader
+  useFocusEffect(
+    useCallback(
+      () => {
+        if (!loading) {
+          void loadNotifications(
+            true
+          );
+        }
+      },
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [
+        loadNotifications,
+      ]
+    )
+  );
+
+
   const handleRefresh =
     async () => {
 
@@ -387,6 +415,63 @@ export default function NotificationsScreen() {
 
       await loadNotifications(
         true
+      );
+    };
+
+
+  /*
+   * Tap on a notification:
+   *  - with a destination: counted as OPENED, the app opens its screen
+   *  - without: only counted as viewed
+   */
+  const openNotification =
+    (
+      notification:
+        MobileNotification
+    ) => {
+
+      if (
+        hasNotificationDestination(
+          notification.destination
+        )
+      ) {
+        const openedAt =
+          new Date()
+            .toISOString();
+
+        setNotifications(
+          (current) =>
+            current.map(
+              (item) =>
+                item.id ===
+                notification.id
+                  ? {
+                      ...item,
+                      viewed_at:
+                        item.viewed_at ||
+                        openedAt,
+                      opened_at:
+                        item.opened_at ||
+                        openedAt,
+                    }
+                  : item
+            )
+        );
+
+        void markNotificationOpenedSafe(
+          notification.id
+        );
+
+        openNotificationDestination(
+          notification.destination,
+          notification.params
+        );
+
+        return;
+      }
+
+      void markAsViewed(
+        notification
       );
     };
 
@@ -427,7 +512,7 @@ export default function NotificationsScreen() {
       );
 
       const success =
-        await markNotificationViewedSafe(
+        await markNotificationSeenSafe(
           notification.id
         );
 
@@ -501,7 +586,7 @@ export default function NotificationsScreen() {
             (
               notification
             ) =>
-              markNotificationViewedSafe(
+              markNotificationSeenSafe(
                 notification.id
               )
           )
@@ -578,6 +663,26 @@ export default function NotificationsScreen() {
         number
     ) => {
 
+      // Browser (Expo web): Alert has no buttons
+      if (
+        Platform.OS ===
+        "web"
+      ) {
+        if (
+          typeof window !==
+            "undefined" &&
+          window.confirm(
+            t.deleteMessage
+          )
+        ) {
+          void removeNotification(
+            notificationId
+          );
+        }
+
+        return;
+      }
+
       Alert.alert(
         t.deleteTitle,
         t.deleteMessage,
@@ -609,6 +714,82 @@ export default function NotificationsScreen() {
     notification:
       MobileNotification
   ) => {
+
+    // Destination / type given by the server
+    switch (
+      notification.destination
+    ) {
+      case "delivery":
+      case "deliveries":
+        return {
+          family:
+            "material" as const,
+          name:
+            "truck-outline" as const,
+        };
+
+      case "plan_deliveries":
+        return {
+          family:
+            "ion" as const,
+          name:
+            "calendar-outline" as const,
+        };
+
+      case "pet_plans":
+        return {
+          family:
+            "ion" as const,
+          name:
+            "sparkles-outline" as const,
+        };
+
+      case "loyalty":
+        return {
+          family:
+            "material" as const,
+          name:
+            "medal-outline" as const,
+        };
+
+      case "support":
+        return {
+          family:
+            "ion" as const,
+          name:
+            "headset-outline" as const,
+        };
+
+      case "shop":
+      case "product":
+        return {
+          family:
+            "ion" as const,
+          name:
+            "bag-handle-outline" as const,
+        };
+
+      case "pet":
+      case "pets":
+        return {
+          family:
+            "ion" as const,
+          name:
+            "paw-outline" as const,
+        };
+    }
+
+    if (
+      notification.type ===
+      "support_ticket"
+    ) {
+      return {
+        family:
+          "ion" as const,
+        name:
+          "headset-outline" as const,
+      };
+    }
 
     const text =
       `${getNotificationTitle(notification)} ${getNotificationBody(notification)}`
@@ -903,6 +1084,20 @@ export default function NotificationsScreen() {
                     notification
                   );
 
+                const unread =
+                  !notification
+                    .viewed_at;
+
+                const actionLabel =
+                  hasNotificationDestination(
+                    notification.destination
+                  )
+                    ? notificationActionLabel(
+                        notification.destination,
+                        isArabic
+                      )
+                    : null;
+
                 const dateText =
                   formatDate(
                     notification
@@ -918,7 +1113,7 @@ export default function NotificationsScreen() {
                     }
                     onPress={
                       () =>
-                        markAsViewed(
+                        openNotification(
                           notification
                         )
                     }
@@ -982,6 +1177,8 @@ export default function NotificationsScreen() {
                         <Text
                           style={[
                             styles.notificationTitle,
+                            unread &&
+                              styles.notificationTitleUnread,
                             isArabic &&
                               styles.textRtl,
                           ]}
@@ -1030,14 +1227,67 @@ export default function NotificationsScreen() {
                             </Text>
                           )}
 
-                          <Text
-                            style={
-                              styles.notificationDate
-                            }
-                          >
-                            {t.read}
-                          </Text>
+                          {unread ? (
+                            <View
+                              style={[
+                                styles.unreadBadge,
+                                isArabic &&
+                                  styles.rowRtl,
+                              ]}
+                            >
+                              <View
+                                style={
+                                  styles.unreadDot
+                                }
+                              />
+                              <Text
+                                style={
+                                  styles.unreadText
+                                }
+                              >
+                                {t.unread}
+                              </Text>
+                            </View>
+                          ) : (
+                            <Text
+                              style={
+                                styles.notificationDate
+                              }
+                            >
+                              {t.read}
+                            </Text>
+                          )}
                         </View>
+
+                        {!!actionLabel && (
+                          <View
+                            style={[
+                              styles.actionRow,
+                              isArabic &&
+                                styles.actionRowRtl,
+                            ]}
+                          >
+                            <Text
+                              style={
+                                styles.actionText
+                              }
+                            >
+                              {actionLabel}
+                            </Text>
+
+                            <Ionicons
+                              name={
+                                isArabic
+                                  ? "chevron-back"
+                                  : "chevron-forward"
+                              }
+                              size={15}
+                              color={
+                                COLORS.primary
+                              }
+                            />
+                          </View>
+                        )}
                       </View>
 
 
@@ -1281,6 +1531,66 @@ const styles =
       alignItems:
         "center",
       gap: 4,
+    },
+
+    notificationTitleUnread: {
+      fontFamily:
+        "Cairo_800ExtraBold",
+    },
+
+    unreadBadge: {
+      flexDirection:
+        "row",
+      alignItems:
+        "center",
+      gap: 5,
+    },
+
+    unreadDot: {
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+      backgroundColor:
+        COLORS.coral,
+    },
+
+    unreadText: {
+      fontFamily:
+        "Cairo_700Bold",
+      fontSize: 12,
+      color:
+        COLORS.coral,
+    },
+
+    actionRow: {
+      marginTop: 14,
+      alignSelf:
+        "flex-start",
+      flexDirection:
+        "row",
+      alignItems:
+        "center",
+      gap: 4,
+      paddingVertical: 6,
+      paddingHorizontal: 12,
+      borderRadius: 999,
+      backgroundColor:
+        "#E2ECE7",
+    },
+
+    actionRowRtl: {
+      alignSelf:
+        "flex-end",
+      flexDirection:
+        "row-reverse",
+    },
+
+    actionText: {
+      fontFamily:
+        "Cairo_700Bold",
+      fontSize: 13,
+      color:
+        COLORS.primary,
     },
 
     notificationDate: {

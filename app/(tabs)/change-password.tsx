@@ -4,8 +4,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useAppLanguage } from "../../context/LanguageContext";
-
-const API_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile/settings/password";
+import { API_MOBILE_URL } from "../../services/apiConfig";   // ou "../services/apiConfig"
+const API_BASE_URL = API_MOBILE_URL;
+const API_URL = `${API_BASE_URL}/api/mobile/settings/password`;
 const COLORS = { background: "#F4F1EC", text: "#272727", muted: "#77736D", border: "#D9D1C6", primary: "#249B97", dark: "#292929" };
 
 export default function ChangePasswordScreen() {

@@ -1,10 +1,9 @@
 import * as SecureStore
   from "expo-secure-store";
 
+import { API_MOBILE_URL } from "./apiConfig";
 
-const API_URL =
-  "https://animal-care2.kharbouch-soufiane.com/api/mobile";
-
+const API_URL = API_MOBILE_URL;
 
 export type AppActivityResponse = {
   success: boolean;

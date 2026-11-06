@@ -14,8 +14,9 @@ import Constants, { ExecutionEnvironment } from "expo-constants";
 import * as Application from "expo-application";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAppLanguage } from "../context/LanguageContext";
+import { API_MOBILE_URL } from "../services/apiConfig";
 
-const API_URL = "https://animal-care2.kharbouch-soufiane.com/api/mobile/app-version";
+const API_URL = `${API_MOBILE_URL}/app-version`;
 const DISMISS_KEY = "maison_chat_update_dismissed_v1";
 const REMIND_AFTER_MS = 24 * 60 * 60 * 1000;
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;
